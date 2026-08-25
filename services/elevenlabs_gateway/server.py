@@ -90,7 +90,10 @@ def load_account_candidates(path: Path, active_api_key: str) -> list[AccountCand
 def run_with_account_failover(
     candidates: list[AccountCandidate],
     operation: Callable[[AccountCandidate], Any],
-    on_retry: Callable[[AccountCandidate, GatewayError, AccountCandidate], None] | None = None,
+    on_rejection: Callable[
+        [AccountCandidate, GatewayError, AccountCandidate | None], None
+    ]
+    | None = None,
 ) -> tuple[Any, AccountCandidate, int]:
     if not candidates:
         raise GatewayError(
@@ -106,6 +109,9 @@ def run_with_account_failover(
         except GatewayError as exc:
             failures.append(exc)
             has_fallback = index + 1 < len(candidates)
+            next_candidate = candidates[index + 1] if has_fallback else None
+            if on_rejection is not None:
+                on_rejection(candidate, exc, next_candidate)
             if not exc.retry_safe:
                 raise
             if not has_fallback:
@@ -126,9 +132,6 @@ def run_with_account_failover(
                         f"({summary}). Last error: {exc.message}"
                     )[:500],
                 ) from exc
-            next_candidate = candidates[index + 1]
-            if on_retry is not None:
-                on_retry(candidate, exc, next_candidate)
 
     raise AssertionError("account failover loop ended unexpectedly")
 
@@ -208,20 +211,25 @@ class Handler(BaseHTTPRequestHandler):
         def perform(candidate: AccountCandidate) -> Any:
             return operation(self._client(config, candidate.api_key))
 
-        def log_retry(
+        def log_rejection(
             candidate: AccountCandidate,
             exc: GatewayError,
-            next_candidate: AccountCandidate,
+            next_candidate: AccountCandidate | None,
         ) -> None:
+            retry = (
+                f"retrying={next_candidate.identifier}"
+                if next_candidate is not None and exc.retry_safe
+                else "retrying=none"
+            )
             print(
                 "[elevenlabs-gateway] account rejected; "
                 f"account={candidate.identifier}; code={exc.code}; "
-                f"retrying={next_candidate.identifier}",
+                f"{retry}",
                 flush=True,
             )
 
         result, selected, attempts = run_with_account_failover(
-            candidates, perform, log_retry
+            candidates, perform, log_rejection
         )
         if selected.api_key != config.api_key:
             self.gateway.runtime_store.update({"api_key": selected.api_key})
