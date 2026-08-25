@@ -4,6 +4,7 @@ import { createObjectDecoder, createValidatedDecoder, hasShape, isArrayOf, isBoo
 export type ElevenLabsStatusDTO = {
   reachable: boolean;
   configured: boolean;
+  accountPoolSize: number;
   proxyConfigured: boolean;
   service: string;
   error?: string;
@@ -156,6 +157,7 @@ export type ImageGenerationDTO = {
 const statusDecoder = createObjectDecoder<ElevenLabsStatusDTO>("ElevenLabs status", {
   reachable: isBoolean,
   configured: isBoolean,
+  accountPoolSize: isNumber,
   proxyConfigured: isBoolean,
   service: isString,
   error: isOptional(isString),

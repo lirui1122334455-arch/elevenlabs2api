@@ -7,10 +7,12 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
@@ -20,16 +22,115 @@ from runtime_config import RuntimeConfig, RuntimeConfigStore
 
 
 MAX_BODY_BYTES = 16 << 20
+ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
-def json_response(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
+def json_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    payload: Any,
+    headers: dict[str, str] | None = None,
+) -> None:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
+    for key, value in (headers or {}).items():
+        handler.send_header(key, value)
     handler.end_headers()
     handler.wfile.write(body)
+
+
+@dataclass(frozen=True)
+class AccountCandidate:
+    identifier: str
+    api_key: str
+
+
+def load_account_candidates(path: Path, active_api_key: str) -> list[AccountCandidate]:
+    records: list[dict[str, Any]] = []
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        values = loaded if isinstance(loaded, list) else [loaded]
+        records = [dict(value) for value in values if isinstance(value, dict)]
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        pass
+
+    stored: list[AccountCandidate] = []
+    for index, record in enumerate(records):
+        api_key = str(record.get("api_key") or "").strip()
+        if not api_key:
+            continue
+        raw_identifier = str(record.get("id") or "").strip()
+        identifier = (
+            raw_identifier
+            if ACCOUNT_ID_PATTERN.fullmatch(raw_identifier)
+            else f"account-{index + 1}"
+        )
+        stored.append(AccountCandidate(identifier, api_key))
+
+    ordered: list[AccountCandidate] = []
+    active = active_api_key.strip()
+    if active:
+        match = next((item for item in stored if item.api_key == active), None)
+        ordered.append(match or AccountCandidate("runtime", active))
+    ordered.extend(stored)
+
+    unique: list[AccountCandidate] = []
+    seen: set[str] = set()
+    for candidate in ordered:
+        if candidate.api_key in seen:
+            continue
+        seen.add(candidate.api_key)
+        unique.append(candidate)
+    return unique
+
+
+def run_with_account_failover(
+    candidates: list[AccountCandidate],
+    operation: Callable[[AccountCandidate], Any],
+    on_retry: Callable[[AccountCandidate, GatewayError, AccountCandidate], None] | None = None,
+) -> tuple[Any, AccountCandidate, int]:
+    if not candidates:
+        raise GatewayError(
+            503,
+            "api_key_not_configured",
+            "No ElevenLabs API key is configured",
+        )
+
+    failures: list[GatewayError] = []
+    for index, candidate in enumerate(candidates):
+        try:
+            return operation(candidate), candidate, index + 1
+        except GatewayError as exc:
+            failures.append(exc)
+            has_fallback = index + 1 < len(candidates)
+            if not exc.retry_safe:
+                raise
+            if not has_fallback:
+                if len(failures) == 1:
+                    raise
+                code_counts: dict[str, int] = {}
+                for failure in failures:
+                    code_counts[failure.code] = code_counts.get(failure.code, 0) + 1
+                summary = ", ".join(
+                    f"{code} x{count}" if count > 1 else code
+                    for code, count in code_counts.items()
+                )
+                raise GatewayError(
+                    exc.status,
+                    "account_pool_exhausted",
+                    (
+                        f"All {len(failures)} configured ElevenLabs accounts were rejected "
+                        f"({summary}). Last error: {exc.message}"
+                    )[:500],
+                ) from exc
+            next_candidate = candidates[index + 1]
+            if on_retry is not None:
+                on_retry(candidate, exc, next_candidate)
+
+    raise AssertionError("account failover loop ended unexpectedly")
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -37,6 +138,7 @@ class GatewayServer(ThreadingHTTPServer):
     media_store: MediaStore
     gateway_key: str
     generation_slots: threading.BoundedSemaphore
+    credentials_path: Path
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -85,11 +187,10 @@ class Handler(BaseHTTPRequestHandler):
     def _gateway_error(self, exc: GatewayError) -> None:
         json_response(self, exc.status, exc.payload())
 
-    def _client(self) -> ElevenLabsClient:
-        config = self.gateway.runtime_store.get()
+    def _client(self, config: RuntimeConfig, api_key: str) -> ElevenLabsClient:
         return ElevenLabsClient(
             ClientConfig(
-                api_key=config.api_key,
+                api_key=api_key,
                 api_base_url=config.api_base_url,
                 proxy_url=config.proxy_url,
                 request_timeout=config.request_timeout,
@@ -98,17 +199,54 @@ class Handler(BaseHTTPRequestHandler):
             self.gateway.media_store,
         )
 
+    def _generate_with_failover(
+        self, operation: Callable[[ElevenLabsClient], Any]
+    ) -> tuple[Any, AccountCandidate, int]:
+        config = self.gateway.runtime_store.get()
+        candidates = load_account_candidates(self.gateway.credentials_path, config.api_key)
+
+        def perform(candidate: AccountCandidate) -> Any:
+            return operation(self._client(config, candidate.api_key))
+
+        def log_retry(
+            candidate: AccountCandidate,
+            exc: GatewayError,
+            next_candidate: AccountCandidate,
+        ) -> None:
+            print(
+                "[elevenlabs-gateway] account rejected; "
+                f"account={candidate.identifier}; code={exc.code}; "
+                f"retrying={next_candidate.identifier}",
+                flush=True,
+            )
+
+        result, selected, attempts = run_with_account_failover(
+            candidates, perform, log_retry
+        )
+        if selected.api_key != config.api_key:
+            self.gateway.runtime_store.update({"api_key": selected.api_key})
+            print(
+                "[elevenlabs-gateway] activated fallback account; "
+                f"account={selected.identifier}; attempts={attempts}",
+                flush=True,
+            )
+        return result, selected, attempts
+
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path in {"/", "/health", "/healthz"}:
             config = self.gateway.runtime_store.get()
+            candidates = load_account_candidates(
+                self.gateway.credentials_path, config.api_key
+            )
             json_response(
                 self,
                 200,
                 {
                     "ok": True,
                     "service": "elevenlabs-gateway",
-                    "configured": bool(config.api_key),
+                    "configured": bool(candidates),
+                    "account_pool_size": len(candidates),
                     "proxy_configured": bool(config.proxy_url),
                     "runtime_revision": config.revision,
                 },
@@ -154,13 +292,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.gateway.generation_slots.acquire(blocking=False):
                     raise GatewayError(429, "gateway_busy", "another generation is already running")
                 try:
-                    data, content_type, metadata = self._client().generate_sound(payload)
+                    generated, account, attempts = self._generate_with_failover(
+                        lambda client: client.generate_sound(payload)
+                    )
+                    data, content_type, metadata = generated
                 finally:
                     self.gateway.generation_slots.release()
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("X-ElevenLabs-Account-Id", account.identifier)
+                self.send_header("X-ElevenLabs-Account-Attempts", str(attempts))
                 for key, value in metadata.items():
                     self.send_header(f"x-elevenlabs-{key}", value)
                 self.end_headers()
@@ -170,10 +313,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.gateway.generation_slots.acquire(blocking=False):
                     raise GatewayError(429, "gateway_busy", "another generation is already running")
                 try:
-                    result = self._client().generate_image(payload)
+                    result, account, attempts = self._generate_with_failover(
+                        lambda client: client.generate_image(payload)
+                    )
                 finally:
                     self.gateway.generation_slots.release()
-                json_response(self, 200, result)
+                json_response(
+                    self,
+                    200,
+                    result,
+                    {
+                        "X-ElevenLabs-Account-Id": account.identifier,
+                        "X-ElevenLabs-Account-Attempts": str(attempts),
+                    },
+                )
                 return
             json_response(self, 404, {"error": {"message": "not found"}})
         except GatewayError as exc:
@@ -327,6 +480,12 @@ def build_server() -> GatewayServer:
     server.runtime_store = runtime_store
     server.media_store = media_store
     server.gateway_key = os.environ.get("ELEVENLABS_GATEWAY_KEY", "").strip()
+    server.credentials_path = Path(
+        os.environ.get(
+            "ELEVENLABS_CREDENTIALS_PATH",
+            "/app/data/elevenlabs-credentials.json",
+        )
+    ).resolve()
     concurrent = max(1, min(int(os.environ.get("ELEVENLABS_MAX_CONCURRENT", "1")), 8))
     server.generation_slots = threading.BoundedSemaphore(concurrent)
     return server
@@ -337,7 +496,7 @@ def main() -> None:
     host, port = server.server_address[:2]
     print(
         f"[elevenlabs-gateway] listening on {host}:{port}; "
-        f"configured={bool(server.runtime_store.get().api_key)}; "
+        f"accounts={len(load_account_candidates(server.credentials_path, server.runtime_store.get().api_key))}; "
         f"proxy={bool(server.runtime_store.get().proxy_url)}",
         flush=True,
     )

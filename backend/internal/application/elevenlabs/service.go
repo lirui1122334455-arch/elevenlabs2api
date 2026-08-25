@@ -25,6 +25,7 @@ const (
 type Status struct {
 	Reachable       bool   `json:"reachable"`
 	Configured      bool   `json:"configured"`
+	AccountPoolSize int    `json:"accountPoolSize"`
 	ProxyConfigured bool   `json:"proxyConfigured"`
 	Service         string `json:"service"`
 	Error           string `json:"error,omitempty"`
@@ -216,6 +217,7 @@ func (s *Service) Status(ctx context.Context) Status {
 		OK              bool   `json:"ok"`
 		Service         string `json:"service"`
 		Configured      bool   `json:"configured"`
+		AccountPoolSize int    `json:"account_pool_size"`
 		ProxyConfigured bool   `json:"proxy_configured"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || !payload.OK {
@@ -224,6 +226,7 @@ func (s *Service) Status(ctx context.Context) Status {
 	}
 	result.Reachable = true
 	result.Configured = payload.Configured
+	result.AccountPoolSize = payload.AccountPoolSize
 	result.ProxyConfigured = payload.ProxyConfigured
 	if strings.TrimSpace(payload.Service) != "" {
 		result.Service = payload.Service

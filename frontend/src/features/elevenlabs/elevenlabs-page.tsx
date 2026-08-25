@@ -189,7 +189,7 @@ function GatewayWorkspace() {
 
       <section className="grid border-y sm:grid-cols-2 xl:grid-cols-4 sm:[&>*:nth-child(even)]:border-l xl:[&>*+*]:border-l">
         <StatusMetric icon={<Network />} label={t("elevenLabs.gateway")} value={status?.reachable ? t("elevenLabs.online") : t("elevenLabs.offline")} healthy={status?.reachable === true} loading={statusQuery.isPending} />
-        <StatusMetric icon={<KeyRound />} label={t("elevenLabs.credential")} value={status?.configured ? t("elevenLabs.configured") : t("elevenLabs.notConfigured")} healthy={status?.configured === true} loading={statusQuery.isPending} />
+        <StatusMetric icon={<KeyRound />} label={t("elevenLabs.credential")} value={status?.configured ? t("elevenLabs.accountPool", { count: status.accountPoolSize }) : t("elevenLabs.notConfigured")} healthy={status?.configured === true} loading={statusQuery.isPending} />
         <StatusMetric icon={<Waves />} label={t("elevenLabs.proxy")} value={status?.proxyConfigured ? t("elevenLabs.configured") : t("elevenLabs.direct")} healthy={status?.reachable === true} loading={statusQuery.isPending} />
         <StatusMetric icon={<Sparkles />} label={t("elevenLabs.models")} value={String(modelCount)} healthy={modelCount > 0} loading={modelsQuery.isPending && status?.reachable === true} />
       </section>
@@ -251,7 +251,7 @@ function GatewayWorkspace() {
               </Field>
               {image.mode === "reference" ? (
                 <Field label={t("elevenLabs.referenceImage")} htmlFor="elevenlabs-reference-image">
-                  <Input ref={referenceInputRef} id="elevenlabs-reference-image" className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { void selectReferenceImage(event.target.files?.[0]); event.target.value = ""; }} />
+                  <input ref={referenceInputRef} id="elevenlabs-reference-image" className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { void selectReferenceImage(event.target.files?.[0]); event.target.value = ""; }} />
                   {referenceImage ? (
                     <div className="flex min-w-0 items-center gap-3 border-y py-3">
                       <img src={`data:${referenceImage.mimeType};base64,${referenceImage.contentBase64}`} alt="" className="size-16 shrink-0 rounded-md border object-cover" />
@@ -336,7 +336,10 @@ function RegistrationWorkspace() {
       void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-status"] });
       if (action === "run") void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-accounts"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+    onError: (error, action) => {
+      toast.error(error instanceof Error ? error.message : t("errors.generic"));
+      if (action === "run") void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-accounts"] });
+    },
   });
   const status = statusQuery.data;
   const ready = status?.reachable === true && status.captchaConfigured && status.mailConfigured;

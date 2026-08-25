@@ -395,13 +395,7 @@ def connect_existing_account(
         page = _page(context)
         page.on("response", lambda response: _capture_account_response(response, account_state))
         _emit(emit, "load_signin", "opening ElevenLabs sign-in for gateway connection")
-        page.goto(SIGNIN_URL, wait_until="domcontentloaded")
-        _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
-        page.locator(SIGNIN_EMAIL).fill(email)
-        page.locator(SIGNIN_PASSWORD).fill(password)
-        _click_signin(page)
-        if not _wait_for_authenticated(page, config.confirmation_timeout):
-            raise RuntimeError("timed out waiting for an authenticated ElevenLabs page")
+        _automated_signin(page, config, email=email, password=password, emit=emit)
         _wait_for_account_snapshot(page, account_state, emit)
         api_key = _provision_gateway_api_key(page, account_state, emit)
         return BrowserResult(
@@ -491,18 +485,138 @@ def _authenticated(page: Any) -> bool:
     return path == "/app/home" or path.startswith("/app/onboarding")
 
 
-def _wait_for_authenticated(page: Any, timeout: float) -> bool:
+def _capture_signin_response(response: Any, state: dict[str, Any]) -> None:
+    try:
+        parsed = urlsplit(str(response.url or ""))
+        if parsed.hostname != "identitytoolkit.googleapis.com" or not parsed.path.endswith(
+            "/accounts:signInWithPassword"
+        ):
+            return
+        state["status"] = int(response.status)
+        state["error"] = ""
+        if int(response.status) >= 400:
+            payload = response.json()
+            error = payload.get("error", payload) if isinstance(payload, dict) else payload
+            if isinstance(error, dict):
+                state["error"] = str(error.get("message") or error.get("status") or "")[:240]
+            elif isinstance(error, str):
+                state["error"] = error[:240]
+    except Exception:
+        return
+
+
+def _wait_for_authenticated(
+    page: Any,
+    timeout: float,
+    *,
+    signin_state: dict[str, Any] | None = None,
+    emit: Callable[[str], None] | None = None,
+    attempt: int = 1,
+) -> bool:
+    started = time.monotonic()
     deadline = time.monotonic() + timeout
+    last_report = -10.0
     while time.monotonic() < deadline:
         if _authenticated(page):
             return True
+        if signin_state and isinstance(signin_state.get("status"), int):
+            status = int(signin_state["status"])
+            if status >= 400:
+                detail = str(signin_state.get("error") or "identity provider rejected the request")
+                raise RuntimeError(f"ElevenLabs sign-in HTTP {status}: {detail}")
         body = _page_text(page)
         if "invalid credential" in body or "incorrect password" in body:
             raise RuntimeError("ElevenLabs rejected the sign-in credentials")
         if "network-request-failed" in body or "auth/network-request-failed" in body:
             raise RuntimeError("ElevenLabs reported auth/network-request-failed; check the proxy")
+        elapsed = time.monotonic() - started
+        if emit and elapsed - last_report >= 10:
+            path = urlsplit(str(page.url or "")).path or "/"
+            status = signin_state.get("status") if signin_state else None
+            _emit(
+                emit,
+                "fill_signin",
+                f"waiting for authenticated page attempt={attempt} elapsed={int(elapsed)}s "
+                f"path={path} identity_status={status or 'pending'}",
+            )
+            last_report = elapsed
         time.sleep(1)
     return False
+
+
+def _signin_bridge_status(page: Any, timeout: float = 3) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        try:
+            value = page.evaluate(
+                """() => window.__elevenlabsHcaptchaBridgeStatus
+                    ? window.__elevenlabsHcaptchaBridgeStatus()
+                    : { patched: false, callbacks: 0, widgetId: '' }"""
+            )
+            if isinstance(value, dict):
+                last = value
+                if bool(value.get("patched")) and int(value.get("callbacks") or 0) > 0:
+                    return value
+        except Exception:
+            pass
+        time.sleep(0.1)
+    return last
+
+
+def _fill_and_submit_signin(page: Any, email: str, password: str) -> None:
+    _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
+    page.locator(SIGNIN_EMAIL).fill(email)
+    page.locator(SIGNIN_PASSWORD).fill(password)
+    _click_signin(page)
+
+
+def _automated_signin(
+    page: Any,
+    config: ElevenLabsConfig,
+    *,
+    email: str,
+    password: str,
+    emit: Callable[[str], None],
+) -> None:
+    signin_state: dict[str, Any] = {"status": None, "error": ""}
+    page.on("response", lambda response: _capture_signin_response(response, signin_state))
+    page.goto(SIGNIN_URL, wait_until="domcontentloaded")
+    _emit(emit, "fill_signin", "submitting ElevenLabs sign-in attempt 1/2")
+    _fill_and_submit_signin(page, email, password)
+    if _wait_for_authenticated(
+        page,
+        30,
+        signin_state=signin_state,
+        emit=emit,
+        attempt=1,
+    ):
+        return
+
+    bridge = _signin_bridge_status(page)
+    signin_state.update({"status": None, "error": ""})
+    if bool(bridge.get("patched")) and int(bridge.get("callbacks") or 0) > 0:
+        _emit(emit, "fill_signin", "sign-in hCaptcha detected; solving before retry")
+        token = _solve_hcaptcha(page, config, emit, invisible=True)
+        _stage_hcaptcha_token(page, token, emit)
+    else:
+        _emit(emit, "fill_signin", "first sign-in attempt did not authenticate; reloading before retry")
+        page.goto(SIGNIN_URL, wait_until="domcontentloaded")
+    _emit(emit, "fill_signin", "submitting ElevenLabs sign-in attempt 2/2")
+    _fill_and_submit_signin(page, email, password)
+    if _wait_for_authenticated(
+        page,
+        45,
+        signin_state=signin_state,
+        emit=emit,
+        attempt=2,
+    ):
+        return
+    path = urlsplit(str(page.url or "")).path or "/"
+    raise RuntimeError(
+        "timed out waiting for an authenticated ElevenLabs page after two sign-in attempts "
+        f"(path={path}, identity_status={signin_state.get('status') or 'pending'})"
+    )
 
 
 def _page_text(page: Any) -> str:
@@ -1091,18 +1205,17 @@ def _run_registration(
         _wait_for_email_verified(page, min(config.confirmation_timeout, 60))
 
         _emit(emit, "load_signin", "opening ElevenLabs sign-in")
-        page.goto(SIGNIN_URL, wait_until="domcontentloaded")
-        _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
-        page.locator(SIGNIN_EMAIL).fill(email)
-        page.locator(SIGNIN_PASSWORD).fill(password)
         if automated:
-            _emit(emit, "fill_signin", "submitting ElevenLabs sign-in")
-            _click_signin(page)
+            _automated_signin(page, config, email=email, password=password, emit=emit)
         else:
+            page.goto(SIGNIN_URL, wait_until="domcontentloaded")
+            _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
+            page.locator(SIGNIN_EMAIL).fill(email)
+            page.locator(SIGNIN_PASSWORD).fill(password)
             _emit(emit, "await_signin_confirmation", "credentials filled; browser is waiting for user sign-in")
             prompt("In Chrome, click Sign in. Press Enter here after the page starts signing in: ")
-        if not _wait_for_authenticated(page, config.confirmation_timeout):
-            raise RuntimeError("timed out waiting for an authenticated ElevenLabs page")
+            if not _wait_for_authenticated(page, min(config.confirmation_timeout, 120)):
+                raise RuntimeError("timed out waiting for an authenticated ElevenLabs page")
         _wait_for_account_snapshot(page, account_state, emit)
         _provision_gateway_api_key(page, account_state, emit)
         _emit(emit, "done", "ElevenLabs authenticated page confirmed")

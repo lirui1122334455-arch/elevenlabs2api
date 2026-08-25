@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import elevenlabs_assisted.browser_flow as browser_flow
 from elevenlabs_assisted.captcha import captcha_proxy_fields, solve_hcaptcha_token
 from elevenlabs_assisted.credentials import (
     account_id,
@@ -57,6 +58,20 @@ class _FakePage:
         if selector == "body":
             return _FakeLocator(text=self.body)
         return _FakeLocator()
+
+
+class _FakeSigninPage:
+    def __init__(self) -> None:
+        self.url = "https://elevenlabs.io/app/sign-in"
+        self.gotos: list[str] = []
+        self.listeners: list[tuple[str, object]] = []
+
+    def on(self, event: str, callback: object) -> None:
+        self.listeners.append((event, callback))
+
+    def goto(self, url: str, **_kwargs: object) -> None:
+        self.url = url
+        self.gotos.append(url)
 
 
 class CaptchaProxyTest(unittest.TestCase):
@@ -367,6 +382,25 @@ class SignupStateTest(unittest.TestCase):
     def test_verified_state_from_signin_url(self) -> None:
         page = _FakePage("https://elevenlabs.io/app/sign-in")
         self.assertTrue(_email_verified(page))
+
+    def test_automated_signin_reloads_after_a_silent_first_attempt(self) -> None:
+        page = _FakeSigninPage()
+        logs: list[str] = []
+        with (
+            patch.object(browser_flow, "_fill_and_submit_signin") as submit,
+            patch.object(browser_flow, "_wait_for_authenticated", side_effect=[False, True]),
+            patch.object(browser_flow, "_signin_bridge_status", return_value={"patched": False, "callbacks": 0}),
+        ):
+            browser_flow._automated_signin(
+                page,
+                SimpleNamespace(),
+                email="one@example.com",
+                password="Password1!",
+                emit=logs.append,
+            )
+        self.assertEqual(submit.call_count, 2)
+        self.assertEqual(page.gotos, [browser_flow.SIGNIN_URL, browser_flow.SIGNIN_URL])
+        self.assertTrue(any("reloading before retry" in line for line in logs))
 
 
 if __name__ == "__main__":

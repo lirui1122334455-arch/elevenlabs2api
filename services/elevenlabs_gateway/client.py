@@ -63,14 +63,23 @@ OUTPUT_FORMATS = {
 }
 SUCCESS_STATES = {"completed", "complete", "succeeded", "success", "ready"}
 FAILURE_STATES = {"failed", "error", "cancelled", "canceled", "rejected"}
+ACCOUNT_REJECTION_STATUSES = {401, 402, 403, 429}
 
 
 class GatewayError(Exception):
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        *,
+        retry_safe: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.retry_safe = retry_safe
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -263,6 +272,14 @@ class ElevenLabsClient:
         return response
 
     @staticmethod
+    def _mark_initial_account_rejection(exc: GatewayError) -> GatewayError:
+        # A non-2xx response to the initial POST did not create a generation job.
+        # Polling, downloads, timeouts, and 5xx responses stay non-retryable.
+        if exc.status in ACCOUNT_REJECTION_STATUSES or exc.code == "hcaptcha_required":
+            exc.retry_safe = True
+        return exc
+
+    @staticmethod
     def _json(response: Any) -> Any:
         try:
             return response.json()
@@ -318,10 +335,12 @@ class ElevenLabsClient:
             if influence < 0 or influence > 1:
                 raise GatewayError(400, "invalid_prompt_influence", "prompt_influence must be between 0 and 1")
             body["prompt_influence"] = influence
-        # This billable POST is intentionally attempted exactly once.
-        response = self._request(
-            "POST", f"/v1/sound-generation?output_format={output_format}", body=body
-        )
+        try:
+            response = self._request(
+                "POST", f"/v1/sound-generation?output_format={output_format}", body=body
+            )
+        except GatewayError as exc:
+            raise self._mark_initial_account_rejection(exc)
         content_type = response.headers.get("Content-Type", "audio/mpeg").split(";", 1)[0]
         if not content_type.startswith("audio/") or not response.content:
             raise GatewayError(502, "invalid_audio", "ElevenLabs did not return audio")
@@ -429,8 +448,10 @@ class ElevenLabsClient:
         response_format = str(payload.get("response_format") or "url")
         if response_format not in {"url", "b64_json"}:
             raise GatewayError(400, "invalid_response_format", "response_format must be url or b64_json")
-        # This billable POST is intentionally attempted exactly once.
-        response = self._request("POST", "/v1/flows/image", body=request)
+        try:
+            response = self._request("POST", "/v1/flows/image", body=request)
+        except GatewayError as exc:
+            raise self._mark_initial_account_rejection(exc)
         result = self._poll_image_flow(self._json(response))
         media, content_type = self._download_image(str(result["content_url"]))
         item: dict[str, Any] = {"revised_prompt": request["prompt"]}

@@ -166,6 +166,7 @@ class ClientTests(unittest.TestCase):
             client.generate_sound({"text": "impact"})
         self.assertEqual(raised.exception.status, 409)
         self.assertEqual(raised.exception.code, "hcaptcha_required")
+        self.assertTrue(raised.exception.retry_safe)
 
     def test_unusual_activity_error_is_preserved(self) -> None:
         client, _ = self.client(
@@ -185,6 +186,41 @@ class ClientTests(unittest.TestCase):
             client.generate_sound({"text": "impact"})
         self.assertEqual(raised.exception.status, 403)
         self.assertEqual(raised.exception.code, "detected_unusual_activity")
+        self.assertTrue(raised.exception.retry_safe)
+
+    def test_paid_plan_rejection_is_safe_for_account_failover(self) -> None:
+        client, _ = self.client(
+            [
+                FakeResponse(
+                    status=402,
+                    payload={
+                        "detail": {
+                            "code": "paid_plan_required",
+                            "message": "This endpoint requires a Pro plan or above.",
+                        }
+                    },
+                )
+            ]
+        )
+        with self.assertRaises(GatewayError) as raised:
+            client.generate_image({"prompt": "test"})
+        self.assertEqual(raised.exception.code, "paid_plan_required")
+        self.assertTrue(raised.exception.retry_safe)
+
+    def test_poll_rejection_is_not_retried_with_another_account(self) -> None:
+        client, _ = self.client(
+            [
+                FakeResponse(payload={"id": "flow-1", "status": "pending"}),
+                FakeResponse(
+                    status=401,
+                    payload={"detail": {"message": "API key expired"}},
+                ),
+            ]
+        )
+        with self.assertRaises(GatewayError) as raised:
+            client.generate_image({"prompt": "test"})
+        self.assertEqual(raised.exception.code, "upstream_unauthorized")
+        self.assertFalse(raised.exception.retry_safe)
 
     def test_rejects_unsupported_image_parameters_before_network(self) -> None:
         client, session = self.client([])

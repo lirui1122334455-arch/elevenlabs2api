@@ -22,6 +22,7 @@ from elevenlabs_assisted.browser_flow import (
 )
 from elevenlabs_assisted.config import ElevenLabsConfig
 from elevenlabs_assisted.credentials import (
+    account_id,
     api_key_from_user_payload,
     find_credentials,
     load_credentials,
@@ -203,13 +204,29 @@ def run_registration_action(
     emit("[phase:create_mailbox] creating one YYDS mailbox")
     email, receiver = create_mailbox(config.mail, emit=emit)
     password = config.password or generate_password()
-    browser_result = run_automated_registration(
-        config,
-        email=email,
-        password=password,
-        receiver=receiver,
-        emit=emit,
-    )
+    if config.save_credentials:
+        save_credentials(
+            config.credentials_file,
+            email=email,
+            password=password,
+            extra={"authenticated": False, "status": "registering"},
+        )
+    try:
+        browser_result = run_automated_registration(
+            config,
+            email=email,
+            password=password,
+            receiver=receiver,
+            emit=emit,
+        )
+    except Exception:
+        if config.save_credentials:
+            update_credentials(
+                config.credentials_file,
+                account_id(email),
+                {"authenticated": False, "status": "failed"},
+            )
+        raise
     if config.save_credentials:
         extra: dict[str, Any] = {
             "final_url": browser_result.final_url,
