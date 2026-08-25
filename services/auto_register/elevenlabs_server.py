@@ -15,6 +15,13 @@ from urllib.parse import urlparse
 
 import requests
 
+from elevenlabs_assisted.batch import (
+    SAME_EXIT_SKIP_MESSAGE,
+    concurrency_for,
+    parse_count,
+    unused_exits,
+    used_exit_keys,
+)
 from elevenlabs_assisted.browser_flow import (
     connect_existing_account,
     dry_run_browser,
@@ -31,8 +38,9 @@ from elevenlabs_assisted.credentials import (
     subscription_snapshot,
     update_credentials,
 )
+from elevenlabs_assisted.dynamic_proxy import fetch_dynamic_proxies
 from elevenlabs_assisted.passwords import generate_password
-from elevenlabs_assisted.proxy_preflight import preflight_proxy
+from elevenlabs_assisted.proxy_preflight import preflight_proxy, safe_proxy_label
 from protocol_register import create_mailbox
 from runtime_config import RuntimeConfig, RuntimeConfigStore
 
@@ -112,6 +120,8 @@ def registration_payload(runtime: RuntimeConfig) -> dict[str, Any]:
         "provider": "elevenlabs",
         "proxy": {
             "url": runtime.proxy_url,
+            "urls": list(runtime.proxy_urls),
+            "api_url": runtime.dynamic_proxy_api,
             "require_proxy": False,
             "preflight_url": "https://elevenlabs.io/app/sign-up",
             "connect_timeout_sec": min(runtime.request_timeout, 120),
@@ -177,13 +187,21 @@ def load_registration_config(runtime: RuntimeConfig) -> ElevenLabsConfig:
 
 
 def run_registration_action(
-    app: "RegisterServer", action: str, emit: Callable[[str], None]
+    app: "RegisterServer",
+    action: str,
+    emit: Callable[[str], None],
+    *,
+    count: int = 1,
 ) -> dict[str, Any]:
     runtime = app.runtime_store.get()
     config = load_registration_config(runtime)
     config.validate_for_automated_run()
+    probe = config.proxy_url or (config.proxy_pool[0] if config.proxy_pool else "")
+    if config.dynamic_proxy_api and action in {"preflight", "dry-run"}:
+        exits = claim_registration_exits(config, count=1, emit=emit)
+        probe = exits[0] if exits else ""
     result = preflight_proxy(
-        config.proxy_url,
+        probe,
         target_url=config.preflight_url,
         timeout=config.proxy_timeout,
     )
@@ -196,11 +214,133 @@ def run_registration_action(
             "ok": True,
             "connection": result.proxy_label,
             "status": result.status_code,
+            "requested": 1,
+            "succeeded": 1,
+            "failed": 0,
         }
     if action == "dry-run":
-        dry_run_browser(config, emit=emit)
-        return {"ok": True}
+        dry_run_browser(config.with_proxy(probe), emit=emit)
+        return {"ok": True, "requested": 1, "succeeded": 1, "failed": 0}
 
+    requested = 1 if action != "register" else max(1, int(count))
+    exits = claim_registration_exits(config, count=requested, emit=emit)
+    workers = concurrency_for(len(exits), requested) if exits else 0
+    if workers == 0:
+        raise RuntimeError(
+            "no unused exit IP is available; ElevenLabs allows one free account per IP"
+        )
+    emit(
+        f"[phase:batch] registering {requested} ElevenLabs accounts "
+        f"concurrency={workers} exits={len(exits)}"
+    )
+    accounts: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    last_success: dict[str, Any] | None = None
+    lock = threading.Lock()
+
+    def register_one(index: int, proxy_url: str) -> None:
+        nonlocal last_success
+        worker_emit = lambda message: emit(f"[account {index}/{requested}] {message}")
+        worker_emit(f"[phase:exit] using {safe_proxy_label(proxy_url)}")
+        try:
+            result = run_one_registration(app, config.with_proxy(proxy_url), worker_emit)
+            result["exit_label"] = safe_proxy_label(proxy_url)
+            with lock:
+                last_success = result
+                accounts.append(
+                    {
+                        "email": result["email"],
+                        "password": result["password"],
+                        "authenticated": result["authenticated"],
+                        "final_url": result["final_url"],
+                    }
+                )
+            worker_emit(f"[phase:batch] ok email={result['email']}")
+        except Exception as exc:
+            message = str(exc)[:400]
+            with lock:
+                failures.append({"index": index, "message": message})
+            worker_emit(f"[phase:failed] {message}")
+            if requested == 1:
+                raise
+
+    if workers == 1:
+        for index, proxy_url in enumerate(exits, start=1):
+            register_one(index, proxy_url)
+    else:
+        slots = threading.Semaphore(workers)
+        threads: list[threading.Thread] = []
+
+        def run_worker(index: int, proxy_url: str) -> None:
+            try:
+                register_one(index, proxy_url)
+            finally:
+                slots.release()
+
+        for index, proxy_url in enumerate(exits, start=1):
+            slots.acquire()
+            thread = threading.Thread(
+                target=run_worker,
+                args=(index, proxy_url),
+                daemon=True,
+                name=f"elevenlabs-register-{index}",
+            )
+            threads.append(thread)
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if requested == 1 and failures:
+            raise RuntimeError(failures[0]["message"])
+    emit(
+        f"[phase:batch] completed requested={requested} succeeded={len(accounts)} failed={len(failures)}"
+    )
+    if not accounts:
+        raise RuntimeError(failures[0]["message"] if failures else "batch registration failed")
+    payload = {
+        "ok": True,
+        "requested": requested,
+        "succeeded": len(accounts),
+        "failed": len(failures),
+        "accounts": accounts,
+        "failures": failures,
+    }
+    if last_success:
+        payload.update(last_success)
+    return payload
+
+
+def claim_registration_exits(
+    config: ElevenLabsConfig,
+    *,
+    count: int,
+    emit: Callable[[str], None],
+) -> list[str]:
+    used = used_exit_keys(load_credentials(credentials_file_path()))
+    if config.dynamic_proxy_api:
+        emit("[phase:exit] fetching sticky IPs from the dynamic proxy API")
+        fetched = fetch_dynamic_proxies(config.dynamic_proxy_api, count=max(count, 1))
+        unused = unused_exits(fetched, used)
+        if len(unused) < count:
+            extra = fetch_dynamic_proxies(
+                config.dynamic_proxy_api,
+                count=max(count - len(unused), 1) + 1,
+            )
+            unused = unused_exits([*unused, *extra], used)
+        return unused[:count]
+    unused = unused_exits(config.proxy_pool or (config.proxy_url,), used)
+    if not unused and not (config.proxy_pool or config.proxy_url):
+        if "direct" in used:
+            emit(f"[phase:exit] {SAME_EXIT_SKIP_MESSAGE}")
+            return []
+        return [""]
+    return unused[:count]
+
+
+def run_one_registration(
+    app: "RegisterServer",
+    config: ElevenLabsConfig,
+    emit: Callable[[str], None],
+) -> dict[str, Any]:
     emit("[phase:create_mailbox] creating one YYDS mailbox")
     email, receiver = create_mailbox(config.mail, emit=emit)
     password = config.password or generate_password()
@@ -209,7 +349,11 @@ def run_registration_action(
             config.credentials_file,
             email=email,
             password=password,
-            extra={"authenticated": False, "status": "registering"},
+            extra={
+                "authenticated": False,
+                "status": "registering",
+                "exit_label": safe_proxy_label(config.proxy_url),
+            },
         )
     try:
         browser_result = run_automated_registration(
@@ -232,6 +376,7 @@ def run_registration_action(
             "final_url": browser_result.final_url,
             "authenticated": browser_result.authenticated,
             "status": "active",
+            "exit_label": safe_proxy_label(config.proxy_url),
         }
         if browser_result.api_key:
             extra["api_key"] = browser_result.api_key
@@ -253,6 +398,7 @@ def run_registration_action(
         "password": password,
         "authenticated": browser_result.authenticated,
         "final_url": browser_result.final_url,
+        "exit_label": safe_proxy_label(config.proxy_url),
     }
 
 
@@ -358,12 +504,24 @@ class Handler(BaseHTTPRequestHandler):
         json_response(self, 401, {"error": {"message": "invalid registration service key"}})
         return False
 
-    def _consume_body(self) -> None:
+    def _consume_body(self) -> Any:
         length = int(self.headers.get("Content-Length") or 0)
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError("invalid request body size")
-        if length:
-            self.rfile.read(length)
+        if not length:
+            return {}
+        raw = self.rfile.read(length)
+        if not raw.strip():
+            return {}
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("request body must be JSON") from exc
+        if payload is None or payload == "":
+            return {}
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return payload
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
@@ -385,6 +543,7 @@ class Handler(BaseHTTPRequestHandler):
                 "service": "elevenlabs-register",
                 "running": self.app.registration_lock.locked(),
                 "connection": runtime.public()["proxy_label"],
+                "dynamic_proxy": bool(runtime.dynamic_proxy_api),
                 "captcha_provider": runtime.captcha_provider,
                 "captcha_configured": not captcha_error,
                 "mail_configured": bool(runtime.yyds_api_key and runtime.mail_domains),
@@ -397,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
         try:
-            self._consume_body()
+            payload = self._consume_body()
         except ValueError as exc:
             json_response(self, 400, {"error": {"message": str(exc)}})
             return
@@ -451,6 +610,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         action, streaming = route
+        try:
+            count = parse_count(payload) if action == "register" else 1
+        except ValueError as exc:
+            json_response(self, 400, {"error": {"code": "invalid_count", "message": str(exc)}})
+            return
         logs: list[str] = []
         stream: ServerSentEventStream | None = None
 
@@ -466,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if streaming:
                 stream = ServerSentEventStream(self)
-            result = run_registration_action(self.app, action, emit)
+            result = run_registration_action(self.app, action, emit, count=count)
             if stream is not None:
                 stream.event("complete", result)
             else:

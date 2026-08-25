@@ -39,6 +39,7 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(preserved.api_key, "api-secret")
             self.assertEqual(preserved.captcha_gateway_api_key, "gateway-secret")
             self.assertEqual(preserved.proxy_url, "")
+            self.assertEqual(preserved.dynamic_proxy_api, "")
 
             cleared = store.update({"clear_api_key": True})
             self.assertEqual(cleared.api_key, "")
@@ -71,6 +72,16 @@ class RuntimeConfigTests(unittest.TestCase):
             }
         )
         self.assertEqual(proxied.captcha_registration_error(), "")
+
+    def test_loads_dynamic_proxy_api(self) -> None:
+        config = RuntimeConfig.from_mapping(
+            {
+                "dynamic_proxy_api": "https://white.1024proxy.com/white/api?region=Rand&num=1&time=10&format=1&type=txt"
+            }
+        )
+        self.assertTrue(config.dynamic_proxy_api)
+        self.assertEqual(config.public()["proxy_label"], "dynamic-ip")
+        self.assertTrue(config.public()["dynamic_proxy_configured"])
 
 
 if __name__ == "__main__":

@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	defaultGatewayURL  = "http://127.0.0.1:8092"
-	defaultRegisterURL = "http://127.0.0.1:8093"
-	maxJSONBytes       = int64(2 << 20)
-	maxAudioBytes      = int64(32 << 20)
+	defaultGatewayURL    = "http://127.0.0.1:8092"
+	defaultRegisterURL   = "http://127.0.0.1:8093"
+	maxJSONBytes         = int64(2 << 20)
+	maxAudioBytes        = int64(32 << 20)
+	maxRegistrationCount = 20
 )
 
 type Status struct {
@@ -55,6 +56,7 @@ type RuntimeConfig struct {
 	APIBaseURL                  string  `json:"apiBaseURL"`
 	ProxyConfigured             bool    `json:"proxyConfigured"`
 	ProxyLabel                  string  `json:"proxyLabel"`
+	DynamicProxyConfigured      bool    `json:"dynamicProxyConfigured"`
 	RequestTimeout              float64 `json:"requestTimeout"`
 	GenerationTimeout           float64 `json:"generationTimeout"`
 	RegistrationTimeout         float64 `json:"registrationTimeout"`
@@ -74,6 +76,8 @@ type RuntimeConfigUpdate struct {
 	ClearAPIKey               bool    `json:"clearAPIKey"`
 	APIBaseURL                string  `json:"apiBaseURL"`
 	ProxyURL                  string  `json:"proxyURL"`
+	DynamicProxyAPI           string  `json:"dynamicProxyAPI"`
+	ClearDynamicProxyAPI      bool    `json:"clearDynamicProxyAPI"`
 	RequestTimeout            float64 `json:"requestTimeout"`
 	GenerationTimeout         float64 `json:"generationTimeout"`
 	RegistrationTimeout       float64 `json:"registrationTimeout"`
@@ -101,15 +105,32 @@ type RegistrationStatus struct {
 	Error             string `json:"error,omitempty"`
 }
 
+type RegistrationCreatedAccount struct {
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	Authenticated bool   `json:"authenticated"`
+	FinalURL      string `json:"finalURL,omitempty"`
+}
+
+type RegistrationFailure struct {
+	Index   int    `json:"index"`
+	Message string `json:"message"`
+}
+
 type RegistrationResult struct {
-	OK            bool     `json:"ok"`
-	Email         string   `json:"email,omitempty"`
-	Password      string   `json:"password,omitempty"`
-	Authenticated bool     `json:"authenticated,omitempty"`
-	FinalURL      string   `json:"finalURL,omitempty"`
-	Connection    string   `json:"connection,omitempty"`
-	Status        int      `json:"status,omitempty"`
-	Logs          []string `json:"logs,omitempty"`
+	OK            bool                         `json:"ok"`
+	Email         string                       `json:"email,omitempty"`
+	Password      string                       `json:"password,omitempty"`
+	Authenticated bool                         `json:"authenticated,omitempty"`
+	FinalURL      string                       `json:"finalURL,omitempty"`
+	Connection    string                       `json:"connection,omitempty"`
+	Status        int                          `json:"status,omitempty"`
+	Requested     int                          `json:"requested,omitempty"`
+	Succeeded     int                          `json:"succeeded,omitempty"`
+	Failed        int                          `json:"failed,omitempty"`
+	Accounts      []RegistrationCreatedAccount `json:"accounts,omitempty"`
+	Failures      []RegistrationFailure        `json:"failures,omitempty"`
+	Logs          []string                     `json:"logs,omitempty"`
 }
 
 type RegistrationAccount struct {
@@ -196,7 +217,7 @@ func NewService(rawBaseURL, gatewayKey, rawRegisterURL, registerKey string) *Ser
 		baseURL: baseURL, gatewayKey: strings.TrimSpace(gatewayKey), configErr: err,
 		client:      &http.Client{Transport: transport, Timeout: 5 * time.Minute},
 		registerURL: registerURL, registerKey: strings.TrimSpace(registerKey), registerConfigErr: registerErr,
-		registerClient: &http.Client{Transport: registerTransport, Timeout: 31 * time.Minute},
+		registerClient: &http.Client{Transport: registerTransport},
 	}
 }
 
@@ -309,6 +330,7 @@ func (s *Service) UpdateRuntimeConfig(ctx context.Context, input RuntimeConfigUp
 	payload := map[string]any{
 		"api_key": input.APIKey, "clear_api_key": input.ClearAPIKey,
 		"api_base_url": input.APIBaseURL, "proxy_url": input.ProxyURL,
+		"dynamic_proxy_api": input.DynamicProxyAPI, "clear_dynamic_proxy_api": input.ClearDynamicProxyAPI,
 		"request_timeout": input.RequestTimeout, "generation_timeout": input.GenerationTimeout,
 		"registration_timeout":          input.RegistrationTimeout,
 		"captcha_provider":              input.CaptchaProvider,
@@ -378,29 +400,61 @@ func (s *Service) RegistrationStatus(ctx context.Context) RegistrationStatus {
 	return result
 }
 
-func (s *Service) RegistrationAction(ctx context.Context, action string) (RegistrationResult, error) {
+func (s *Service) RegistrationAction(ctx context.Context, action string, count int) (RegistrationResult, error) {
 	path, err := registrationActionPath(action, false)
 	if err != nil {
 		return RegistrationResult{}, err
 	}
-	body, _, err := s.doRegister(ctx, http.MethodPost, path, []byte("{}"), maxJSONBytes)
+	requestBody, err := registrationActionBody(action, count)
+	if err != nil {
+		return RegistrationResult{}, err
+	}
+	body, _, err := s.doRegister(ctx, http.MethodPost, path, requestBody, maxJSONBytes)
 	if err != nil {
 		return RegistrationResult{}, err
 	}
 	var payload struct {
-		OK            bool     `json:"ok"`
-		Email         string   `json:"email"`
-		Password      string   `json:"password"`
-		Authenticated bool     `json:"authenticated"`
-		FinalURL      string   `json:"final_url"`
-		Connection    string   `json:"connection"`
-		Status        int      `json:"status"`
-		Logs          []string `json:"logs"`
+		OK            bool   `json:"ok"`
+		Email         string `json:"email"`
+		Password      string `json:"password"`
+		Authenticated bool   `json:"authenticated"`
+		FinalURL      string `json:"final_url"`
+		Connection    string `json:"connection"`
+		Status        int    `json:"status"`
+		Requested     int    `json:"requested"`
+		Succeeded     int    `json:"succeeded"`
+		Failed        int    `json:"failed"`
+		Accounts      []struct {
+			Email         string `json:"email"`
+			Password      string `json:"password"`
+			Authenticated bool   `json:"authenticated"`
+			FinalURL      string `json:"final_url"`
+		} `json:"accounts"`
+		Failures []struct {
+			Index   int    `json:"index"`
+			Message string `json:"message"`
+		} `json:"failures"`
+		Logs []string `json:"logs"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || !payload.OK {
 		return RegistrationResult{}, invalidResponseError()
 	}
-	return RegistrationResult{OK: true, Email: payload.Email, Password: payload.Password, Authenticated: payload.Authenticated, FinalURL: payload.FinalURL, Connection: payload.Connection, Status: payload.Status, Logs: payload.Logs}, nil
+	accounts := make([]RegistrationCreatedAccount, 0, len(payload.Accounts))
+	for _, account := range payload.Accounts {
+		accounts = append(accounts, RegistrationCreatedAccount{
+			Email: account.Email, Password: account.Password, Authenticated: account.Authenticated, FinalURL: account.FinalURL,
+		})
+	}
+	failures := make([]RegistrationFailure, 0, len(payload.Failures))
+	for _, failure := range payload.Failures {
+		failures = append(failures, RegistrationFailure{Index: failure.Index, Message: failure.Message})
+	}
+	return RegistrationResult{
+		OK: true, Email: payload.Email, Password: payload.Password, Authenticated: payload.Authenticated,
+		FinalURL: payload.FinalURL, Connection: payload.Connection, Status: payload.Status,
+		Requested: payload.Requested, Succeeded: payload.Succeeded, Failed: payload.Failed,
+		Accounts: accounts, Failures: failures, Logs: payload.Logs,
+	}, nil
 }
 
 func (s *Service) RegistrationAccounts(ctx context.Context) ([]RegistrationAccount, error) {
@@ -459,7 +513,7 @@ func registrationAccountFromWire(account registrationAccountWire) RegistrationAc
 	}
 }
 
-func (s *Service) RegistrationActionStream(ctx context.Context, action string) (RegistrationEventStream, error) {
+func (s *Service) RegistrationActionStream(ctx context.Context, action string, count int) (RegistrationEventStream, error) {
 	if s == nil {
 		return RegistrationEventStream{}, unavailableError("ElevenLabs registration service is unavailable")
 	}
@@ -470,7 +524,11 @@ func (s *Service) RegistrationActionStream(ctx context.Context, action string) (
 	if err != nil {
 		return RegistrationEventStream{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.registerURL+path, bytes.NewReader([]byte("{}")))
+	requestBody, err := registrationActionBody(action, count)
+	if err != nil {
+		return RegistrationEventStream{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.registerURL+path, bytes.NewReader(requestBody))
 	if err != nil {
 		return RegistrationEventStream{}, unavailableError("failed to create ElevenLabs registration request")
 	}
@@ -509,6 +567,31 @@ func registrationActionPath(action string, stream bool) (string, error) {
 		path += "/stream"
 	}
 	return path, nil
+}
+
+func registrationActionBody(action string, count int) ([]byte, error) {
+	if action != "register" {
+		return []byte("{}"), nil
+	}
+	normalized, err := NormalizeRegistrationCount(count)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"count": normalized})
+}
+
+func NormalizeRegistrationCount(count int) (int, error) {
+	if count <= 0 {
+		return 1, nil
+	}
+	if count > maxRegistrationCount {
+		return 0, &GatewayError{
+			Status:  http.StatusBadRequest,
+			Code:    "invalidRequest",
+			Message: fmt.Sprintf("count must be between 1 and %d", maxRegistrationCount),
+		}
+	}
+	return count, nil
 }
 
 func (s *Service) do(ctx context.Context, method, path string, payload []byte, limit int64) ([]byte, http.Header, error) {
@@ -607,6 +690,7 @@ func decodeRuntimeConfig(body []byte) (RuntimeConfig, error) {
 		APIBaseURL                  string  `json:"api_base_url"`
 		ProxyConfigured             bool    `json:"proxy_configured"`
 		ProxyLabel                  string  `json:"proxy_label"`
+		DynamicProxyConfigured      bool    `json:"dynamic_proxy_configured"`
 		RequestTimeout              float64 `json:"request_timeout"`
 		GenerationTimeout           float64 `json:"generation_timeout"`
 		RegistrationTimeout         float64 `json:"registration_timeout"`
@@ -626,6 +710,7 @@ func decodeRuntimeConfig(body []byte) (RuntimeConfig, error) {
 	return RuntimeConfig{
 		APIKeyConfigured: payload.APIKeyConfigured, APIBaseURL: payload.APIBaseURL,
 		ProxyConfigured: payload.ProxyConfigured, ProxyLabel: payload.ProxyLabel,
+		DynamicProxyConfigured: payload.DynamicProxyConfigured,
 		RequestTimeout: payload.RequestTimeout, GenerationTimeout: payload.GenerationTimeout,
 		RegistrationTimeout:     payload.RegistrationTimeout,
 		CaptchaProvider:         payload.CaptchaProvider,

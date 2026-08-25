@@ -7,12 +7,14 @@ from typing import Any
 
 from protocol_register import create_mailbox
 
+from .batch import MAX_BATCH_COUNT, concurrency_for, unused_exits, used_exit_keys
 from .browser_flow import dry_run_browser, run_assisted_registration, run_automated_registration
 from .config import ElevenLabsConfig
-from .credentials import save_credentials
+from .credentials import load_credentials, save_credentials
+from .dynamic_proxy import fetch_dynamic_proxies
 from .mailbox_link import MailContent, extract_verification_link
 from .passwords import generate_password
-from .proxy_preflight import preflight_proxy
+from .proxy_preflight import preflight_proxy, safe_proxy_label
 
 
 def phase(name: str, message: str) -> None:
@@ -75,37 +77,76 @@ def _persist(config: ElevenLabsConfig, email: str, password: str, final_url: str
         config.credentials_file,
         email=email,
         password=password,
-        extra={"final_url": final_url},
+        extra={"final_url": final_url, "exit_label": safe_proxy_label(config.proxy_url)},
     )
     phase("done", f"credentials saved to {path}")
 
 
-def _run(config: ElevenLabsConfig, *, automated: bool) -> None:
+def _claim_exits(config: ElevenLabsConfig, count: int) -> list[str]:
+    used = used_exit_keys(load_credentials(config.credentials_file))
+    if config.dynamic_proxy_api:
+        phase("exit", "fetching sticky IPs from the dynamic proxy API")
+        fetched = fetch_dynamic_proxies(config.dynamic_proxy_api, count=count)
+        unused = unused_exits(fetched, used)
+        return unused[:count]
+    unused = unused_exits(config.proxy_pool or (config.proxy_url,), used)
+    if not unused and not (config.proxy_pool or config.proxy_url):
+        return [] if "direct" in used else [""]
+    return unused[:count]
+
+
+def _run(config: ElevenLabsConfig, *, automated: bool, count: int = 1) -> None:
     if automated:
         config.validate_for_automated_run()
     else:
         config.validate_for_run()
-    _preflight(config)
-    email, receiver, password = _prepare_account(config)
-    runner = run_automated_registration if automated else run_assisted_registration
-    result = runner(
-        config,
-        email=email,
-        password=password,
-        receiver=receiver,
-        emit=print,
-    )
-    _persist(config, result.email, password, result.final_url)
-    phase("done", f"authenticated={result.authenticated} email={result.email} url={result.final_url}")
+    if count < 1 or count > MAX_BATCH_COUNT:
+        raise SystemExit(f"count must be between 1 and {MAX_BATCH_COUNT}")
+    if count > 1 and not automated:
+        raise SystemExit("run-assisted only supports a single account")
+    exits = _claim_exits(config, count)
+    if not exits:
+        raise SystemExit("no unused exit IP is available; ElevenLabs allows one free account per IP")
+    workers = concurrency_for(len(exits), count)
+    _preflight(config.with_proxy(exits[0]))
+    succeeded = 0
+    failed = 0
+    phase("batch", f"registering {count} accounts concurrency={workers} exits={len(exits)}")
+    for index, proxy_url in enumerate(exits, start=1):
+        worker = config.with_proxy(proxy_url)
+        phase("exit", f"account {index}/{count} {safe_proxy_label(proxy_url)}")
+        try:
+            email, receiver, password = _prepare_account(worker)
+            runner = run_automated_registration if automated else run_assisted_registration
+            result = runner(
+                worker,
+                email=email,
+                password=password,
+                receiver=receiver,
+                emit=print,
+            )
+            _persist(worker, result.email, password, result.final_url)
+            phase("done", f"authenticated={result.authenticated} email={result.email} url={result.final_url}")
+            succeeded += 1
+        except Exception as exc:
+            failed += 1
+            phase("failed", f"account {index}/{count} {str(exc)[:400]}")
+            if count == 1:
+                raise SystemExit(1) from exc
+    if count > 1:
+        phase("batch", f"completed requested={count} succeeded={succeeded} failed={failed}")
+        if succeeded == 0:
+            raise SystemExit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="ElevenLabs single-account registration")
+    parser = argparse.ArgumentParser(description="ElevenLabs account registration")
     parser.add_argument("--config", required=True, help="Path to a local JSON config file")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("preflight", help="Check config, proxy listener, and ElevenLabs HTTPS")
     subparsers.add_parser("dry-run", help="Open the sign-up page and verify selectors without submitting")
-    subparsers.add_parser("run", help="Run one fully automated registration")
+    run_parser = subparsers.add_parser("run", help="Run one or more fully automated registrations")
+    run_parser.add_argument("--count", type=int, default=1, help=f"Number of accounts to register sequentially (1-{MAX_BATCH_COUNT})")
     subparsers.add_parser("run-assisted", help="Run one user-assisted registration")
     return parser
 
@@ -122,7 +163,7 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "run-assisted":
             _run(config, automated=False)
         else:
-            _run(config, automated=True)
+            _run(config, automated=True, count=getattr(args, "count", 1))
     except KeyboardInterrupt:
         phase("stopped", "cancelled by user")
         raise SystemExit(130) from None

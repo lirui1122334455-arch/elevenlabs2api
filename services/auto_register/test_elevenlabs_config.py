@@ -52,7 +52,21 @@ class ConfigTest(unittest.TestCase):
             )
         )
         self.assertEqual(config.proxy_url, "")
+        self.assertEqual(config.dynamic_proxy_api, "")
         self.assertEqual(config.mail["email_proxy"], "direct")
+
+    def test_loads_dynamic_sticky_ip_api(self) -> None:
+        config = ElevenLabsConfig.load(
+            self._write(
+                {
+                    "proxy": {
+                        "api_url": "https://white.1024proxy.com/white/api?region=Rand&num=1&time=10&format=1&type=txt"
+                    }
+                }
+            )
+        )
+        self.assertTrue(config.dynamic_proxy_api.startswith("https://white.1024proxy.com/white/api"))
+        self.assertEqual(config.proxy_url, "")
 
     def test_requires_url_when_proxy_is_mandatory(self) -> None:
         with self.assertRaisesRegex(ValueError, "proxy.url is required"):

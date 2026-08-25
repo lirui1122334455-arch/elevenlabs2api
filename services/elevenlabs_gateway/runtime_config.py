@@ -15,26 +15,60 @@ _DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63
 _CAPTCHA_PROVIDERS = {"yescaptcha", "captcha_gateway"}
 
 
-def _https_url(value: Any, default: str, name: str) -> str:
+def _https_url(value: Any, default: str, name: str, *, allow_query: bool = False) -> str:
     raw = str(value or default).strip().rstrip("/")
     parsed = urlsplit(raw)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError(f"{name} must be an HTTPS URL without credentials")
-    if parsed.query or parsed.fragment:
+    if parsed.fragment or (parsed.query and not allow_query):
         raise ValueError(f"{name} cannot contain a query or fragment")
     return raw
 
 
-def _proxy_url(value: Any) -> str:
+def _dynamic_proxy_api(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
     parsed = urlsplit(raw)
-    if parsed.scheme.lower() not in _PROXY_SCHEMES or not parsed.hostname or not parsed.port:
-        raise ValueError("proxy_url must include a supported scheme, host, and port")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise ValueError("proxy_url cannot contain a path, query, or fragment")
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc, "", "", ""))
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("dynamic_proxy_api must be an HTTPS URL")
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    if "1024proxy" not in host and "/white/api" not in path:
+        raise ValueError("dynamic_proxy_api must be a 1024Proxy whitelist API URL")
+    return raw
+
+
+def _proxy_url(value: Any) -> str:
+    urls = _proxy_urls(value)
+    return urls[0] if len(urls) == 1 else ""
+
+
+def _proxy_urls(value: Any) -> tuple[str, ...]:
+    if value in {None, ""}:
+        return ()
+    if isinstance(value, (list, tuple)):
+        parts = [str(item) for item in value]
+    else:
+        parts = re.split(r"[\n,;]+", str(value))
+    unique: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        raw = part.strip()
+        if not raw:
+            continue
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in _PROXY_SCHEMES or not parsed.hostname or not parsed.port:
+            raise ValueError("proxy_url must include a supported scheme, host, and port")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("proxy_url cannot contain a path, query, or fragment")
+        normalized = urlunsplit((parsed.scheme.lower(), parsed.netloc, "", "", ""))
+        label = _safe_proxy_label(normalized)
+        if label in seen:
+            continue
+        seen.add(label)
+        unique.append(normalized)
+    return tuple(unique)
 
 
 def _domains(value: Any) -> str:
@@ -87,6 +121,8 @@ class RuntimeConfig:
     api_key: str = ""
     api_base_url: str = "https://api.us.elevenlabs.io"
     proxy_url: str = ""
+    proxy_urls: tuple[str, ...] = ()
+    dynamic_proxy_api: str = ""
     request_timeout: float = 60.0
     generation_timeout: float = 240.0
     registration_timeout: float = 600.0
@@ -109,6 +145,8 @@ class RuntimeConfig:
                 raw.get("api_base_url"), "https://api.us.elevenlabs.io", "api_base_url"
             ),
             proxy_url=_proxy_url(raw.get("proxy_url")),
+            proxy_urls=_proxy_urls(raw.get("proxy_urls") or raw.get("proxy_url")),
+            dynamic_proxy_api=_dynamic_proxy_api(raw.get("dynamic_proxy_api")),
             request_timeout=_seconds(raw.get("request_timeout"), 60, "request_timeout", 5, 300),
             generation_timeout=_seconds(
                 raw.get("generation_timeout"), 240, "generation_timeout", 30, 900
@@ -142,6 +180,8 @@ class RuntimeConfig:
                 "api_key": os.environ.get("ELEVENLABS_API_KEY", ""),
                 "api_base_url": os.environ.get("ELEVENLABS_API_BASE_URL", ""),
                 "proxy_url": os.environ.get("ELEVENLABS_PROXY_URL", ""),
+                "proxy_urls": os.environ.get("ELEVENLABS_PROXY_URLS") or os.environ.get("ELEVENLABS_PROXY_URL", ""),
+                "dynamic_proxy_api": os.environ.get("ELEVENLABS_DYNAMIC_PROXY_API", ""),
                 "request_timeout": os.environ.get("ELEVENLABS_REQUEST_TIMEOUT", ""),
                 "generation_timeout": os.environ.get("ELEVENLABS_GENERATION_TIMEOUT", ""),
                 "registration_timeout": os.environ.get("ELEVENLABS_REGISTRATION_TIMEOUT", ""),
@@ -170,19 +210,32 @@ class RuntimeConfig:
         if not self.selected_captcha_api_key():
             label = "Captcha Gateway" if self.captcha_provider == "captcha_gateway" else "YesCaptcha"
             return f"{label} API key is not configured"
-        if self.captcha_provider == "captcha_gateway" and not self.proxy_url:
+        if self.captcha_provider == "captcha_gateway" and not (
+            self.proxy_url or self.proxy_urls or self.dynamic_proxy_api
+        ):
             return (
                 "Captcha Gateway hCaptcha requires a task proxy; "
                 "configure a proxy URL or select YesCaptcha for direct mode"
             )
         return ""
 
+    def registration_exits(self) -> tuple[str, ...]:
+        if self.dynamic_proxy_api:
+            return ()
+        return self.proxy_urls or ((self.proxy_url,) if self.proxy_url else ("",))
+
     def public(self) -> dict[str, Any]:
         return {
             "api_key_configured": bool(self.api_key),
             "api_base_url": self.api_base_url,
-            "proxy_configured": bool(self.proxy_url),
-            "proxy_label": _safe_proxy_label(self.proxy_url),
+            "proxy_configured": bool(self.proxy_url or self.proxy_urls or self.dynamic_proxy_api),
+            "proxy_label": (
+                "dynamic-ip"
+                if self.dynamic_proxy_api
+                else _safe_proxy_label(self.proxy_url or (self.proxy_urls[0] if self.proxy_urls else ""))
+            ),
+            "dynamic_proxy_configured": bool(self.dynamic_proxy_api),
+            "proxy_count": 0 if self.dynamic_proxy_api else (len(self.registration_exits()) if self.proxy_url or self.proxy_urls else 0),
             "request_timeout": self.request_timeout,
             "generation_timeout": self.generation_timeout,
             "registration_timeout": self.registration_timeout,
@@ -229,6 +282,7 @@ class RuntimeConfigStore:
                 "yescaptcha_api_key": "clear_yescaptcha_api_key",
                 "captcha_gateway_api_key": "clear_captcha_gateway_api_key",
                 "yyds_api_key": "clear_yyds_api_key",
+                "dynamic_proxy_api": "clear_dynamic_proxy_api",
             }
             for field, clear_field in secret_fields.items():
                 if payload.get(clear_field) is True:
@@ -238,6 +292,7 @@ class RuntimeConfigStore:
             for field in (
                 "api_base_url",
                 "proxy_url",
+                "proxy_urls",
                 "request_timeout",
                 "generation_timeout",
                 "registration_timeout",

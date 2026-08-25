@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .batch import parse_proxy_urls
+from .dynamic_proxy import is_dynamic_proxy_api
 from .mailbox_link import normalize_allowed_hosts
 from .passwords import is_valid_password
 from .proxy_preflight import normalize_proxy_url
@@ -70,6 +72,8 @@ def _captcha_provider(value: Any) -> str:
 class ElevenLabsConfig:
     source: Path
     proxy_url: str
+    proxy_pool: tuple[str, ...]
+    dynamic_proxy_api: str
     preflight_url: str
     proxy_timeout: float
     profile_dir: Path
@@ -101,10 +105,22 @@ class ElevenLabsConfig:
             raise ValueError("provider must be elevenlabs")
 
         proxy = _mapping(payload.get("proxy"), "proxy")
-        proxy_url = normalize_proxy_url(
-            str(proxy.get("url") or os.getenv("ELEVENLABS_PROXY_URL") or "")
+        dynamic_proxy_api = str(
+            proxy.get("api_url")
+            or os.getenv("ELEVENLABS_DYNAMIC_PROXY_API")
+            or ""
+        ).strip()
+        if dynamic_proxy_api and not is_dynamic_proxy_api(dynamic_proxy_api):
+            raise ValueError("proxy.api_url must be an HTTPS dynamic-IP API")
+        proxy_pool = () if dynamic_proxy_api else parse_proxy_urls(
+            proxy.get("urls") or proxy.get("pool"),
+            proxy.get("url"),
+            os.getenv("ELEVENLABS_PROXY_URLS") or os.getenv("ELEVENLABS_PROXY_URL") or "",
         )
-        if proxy.get("require_proxy") is True and not proxy_url:
+        proxy_url = "" if dynamic_proxy_api else normalize_proxy_url(str(proxy.get("url") or ""))
+        if not proxy_url and len(proxy_pool) == 1:
+            proxy_url = proxy_pool[0]
+        if proxy.get("require_proxy") is True and not proxy_pool and not dynamic_proxy_api:
             raise ValueError("proxy.url is required when proxy.require_proxy is true")
 
         browser = _mapping(payload.get("browser"), "browser")
@@ -210,6 +226,8 @@ class ElevenLabsConfig:
         return cls(
             source=source,
             proxy_url=proxy_url,
+            proxy_pool=proxy_pool,
+            dynamic_proxy_api=dynamic_proxy_api,
             preflight_url=str(proxy.get("preflight_url") or "https://elevenlabs.io/app/sign-up"),
             proxy_timeout=_timeout(proxy.get("connect_timeout_sec"), 15, "proxy.connect_timeout_sec", maximum=120),
             profile_dir=profile_dir,
@@ -266,8 +284,15 @@ class ElevenLabsConfig:
         if not self.captcha_api_key or _placeholder(self.captcha_api_key):
             label = "Captcha Gateway" if self.captcha_provider == "captcha_gateway" else "YesCaptcha"
             raise ValueError(f"replace the local {label} API key before running automated signup")
-        if self.captcha_provider == "captcha_gateway" and not self.proxy_url:
+        if self.captcha_provider == "captcha_gateway" and not (self.proxy_url or self.proxy_pool or self.dynamic_proxy_api):
             raise ValueError(
                 "Captcha Gateway hCaptcha requires proxy.url; "
                 "configure a task proxy or select YesCaptcha for direct mode"
             )
+
+    def with_proxy(self, proxy_url: str) -> "ElevenLabsConfig":
+        mail = dict(self.mail)
+        email_proxy = str(mail.get("email_proxy") or "same_as_browser").strip()
+        if email_proxy in {"same_as_browser", "direct", ""} or email_proxy == (self.proxy_url or "direct"):
+            mail["email_proxy"] = proxy_url or "direct"
+        return replace(self, proxy_url=proxy_url, mail=mail)

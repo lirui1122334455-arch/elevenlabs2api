@@ -31,6 +31,7 @@ export type ElevenLabsRuntimeConfigDTO = {
   apiBaseURL: string;
   proxyConfigured: boolean;
   proxyLabel: string;
+  dynamicProxyConfigured: boolean;
   requestTimeout: number;
   generationTimeout: number;
   registrationTimeout: number;
@@ -50,6 +51,8 @@ export type ElevenLabsRuntimeConfigInput = {
   clearAPIKey: boolean;
   apiBaseURL: string;
   proxyURL: string;
+  dynamicProxyAPI: string;
+  clearDynamicProxyAPI: boolean;
   requestTimeout: number;
   generationTimeout: number;
   registrationTimeout: number;
@@ -86,6 +89,18 @@ export type ElevenLabsRegistrationStatusDTO = {
   error?: string;
 };
 
+export type ElevenLabsCreatedAccountDTO = {
+  email: string;
+  password: string;
+  authenticated: boolean;
+  finalURL?: string;
+};
+
+export type ElevenLabsRegistrationFailureDTO = {
+  index: number;
+  message: string;
+};
+
 export type ElevenLabsRegistrationResultDTO = {
   ok: boolean;
   email?: string;
@@ -94,6 +109,11 @@ export type ElevenLabsRegistrationResultDTO = {
   finalURL?: string;
   connection?: string;
   status?: number;
+  requested?: number;
+  succeeded?: number;
+  failed?: number;
+  accounts?: ElevenLabsCreatedAccountDTO[];
+  failures?: ElevenLabsRegistrationFailureDTO[];
   logs?: string[];
 };
 
@@ -124,6 +144,19 @@ type ElevenLabsRegistrationStreamEventDTO = {
   final_url?: string;
   connection?: string;
   status?: number;
+  requested?: number;
+  succeeded?: number;
+  failed?: number;
+  accounts?: Array<{
+    email?: string;
+    password?: string;
+    authenticated?: boolean;
+    final_url?: string;
+  }>;
+  failures?: Array<{
+    index?: number;
+    message?: string;
+  }>;
 };
 
 export type SoundGenerationInput = {
@@ -184,6 +217,7 @@ const runtimeConfigDecoder = createObjectDecoder<ElevenLabsRuntimeConfigDTO>("El
   apiBaseURL: isString,
   proxyConfigured: isBoolean,
   proxyLabel: isString,
+  dynamicProxyConfigured: isBoolean,
   requestTimeout: isNumber,
   generationTimeout: isNumber,
   registrationTimeout: isNumber,
@@ -218,6 +252,16 @@ const registrationStatusDecoder = createObjectDecoder<ElevenLabsRegistrationStat
   error: isOptional(isString),
 });
 
+const createdAccountValidator = hasShape({
+  email: isString,
+  password: isString,
+  authenticated: isBoolean,
+  finalURL: isOptional(isString),
+});
+const registrationFailureValidator = hasShape({
+  index: isNumber,
+  message: isString,
+});
 const registrationResultDecoder = createObjectDecoder<ElevenLabsRegistrationResultDTO>("ElevenLabs registration result", {
   ok: isBoolean,
   email: isOptional(isString),
@@ -226,9 +270,24 @@ const registrationResultDecoder = createObjectDecoder<ElevenLabsRegistrationResu
   finalURL: isOptional(isString),
   connection: isOptional(isString),
   status: isOptional(isNumber),
+  requested: isOptional(isNumber),
+  succeeded: isOptional(isNumber),
+  failed: isOptional(isNumber),
+  accounts: isOptional(isArrayOf(createdAccountValidator)),
+  failures: isOptional(isArrayOf(registrationFailureValidator)),
   logs: isOptional(isArrayOf(isString)),
 });
 
+const streamAccountValidator = hasShape({
+  email: isOptional(isString),
+  password: isOptional(isString),
+  authenticated: isOptional(isBoolean),
+  final_url: isOptional(isString),
+});
+const streamFailureValidator = hasShape({
+  index: isOptional(isNumber),
+  message: isOptional(isString),
+});
 const registrationStreamEventDecoder = createObjectDecoder<ElevenLabsRegistrationStreamEventDTO>("ElevenLabs registration stream event", {
   message: isOptional(isString),
   code: isOptional(isString),
@@ -239,6 +298,11 @@ const registrationStreamEventDecoder = createObjectDecoder<ElevenLabsRegistratio
   final_url: isOptional(isString),
   connection: isOptional(isString),
   status: isOptional(isNumber),
+  requested: isOptional(isNumber),
+  succeeded: isOptional(isNumber),
+  failed: isOptional(isNumber),
+  accounts: isOptional(isArrayOf(streamAccountValidator)),
+  failures: isOptional(isArrayOf(streamFailureValidator)),
 });
 
 const nullableNumber = (value: unknown): boolean => value === null || isNumber(value);
@@ -303,18 +367,26 @@ export function refreshElevenLabsRegistrationAccount(identifier: string): Promis
   );
 }
 
-export function runElevenLabsRegistrationAction(action: "preflight" | "dry-run" | "run"): Promise<ElevenLabsRegistrationResultDTO> {
-  return apiRequest(`/api/admin/v1/elevenlabs/registration/${action}`, { method: "POST", body: {} }, registrationResultDecoder);
+export function runElevenLabsRegistrationAction(
+  action: "preflight" | "dry-run" | "run",
+  count = 1,
+): Promise<ElevenLabsRegistrationResultDTO> {
+  return apiRequest(
+    `/api/admin/v1/elevenlabs/registration/${action}`,
+    { method: "POST", body: action === "run" ? { count } : {} },
+    registrationResultDecoder,
+  );
 }
 
 export async function streamElevenLabsRegistrationAction(
   action: "preflight" | "dry-run" | "run",
   onLog: (message: string) => void,
+  count = 1,
 ): Promise<ElevenLabsRegistrationResultDTO> {
   let result: ElevenLabsRegistrationResultDTO | undefined;
   await apiEventStream(
     `/api/admin/v1/elevenlabs/registration/${action}`,
-    { method: "POST", headers: { Accept: "text/event-stream" }, body: {} },
+    { method: "POST", headers: { Accept: "text/event-stream" }, body: action === "run" ? { count } : {} },
     registrationStreamEventDecoder,
     ({ event, data }) => {
       if (event === "log" && data.message) {
@@ -333,6 +405,24 @@ export async function streamElevenLabsRegistrationAction(
           finalURL: data.final_url,
           connection: data.connection,
           status: data.status,
+          requested: data.requested,
+          succeeded: data.succeeded,
+          failed: data.failed,
+          accounts: (data.accounts ?? []).flatMap((account) => (
+            account.email && account.password
+              ? [{
+                email: account.email,
+                password: account.password,
+                authenticated: account.authenticated === true,
+                finalURL: account.final_url,
+              }]
+              : []
+          )),
+          failures: (data.failures ?? []).flatMap((failure) => (
+            typeof failure.index === "number" && failure.message
+              ? [{ index: failure.index, message: failure.message }]
+              : []
+          )),
         };
       }
     },

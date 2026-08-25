@@ -295,10 +295,13 @@ function GatewayWorkspace() {
   );
 }
 
+const MAX_REGISTRATION_COUNT = 20;
+
 function RegistrationWorkspace() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [count, setCount] = useState(1);
   const [logs, setLogs] = useState<string[]>([]);
   const [revealedPasswords, setRevealedPasswords] = useState<Set<string>>(() => new Set());
   const logViewportRef = useRef<HTMLDivElement>(null);
@@ -329,10 +332,14 @@ function RegistrationWorkspace() {
       setLogs([]);
       return streamElevenLabsRegistrationAction(action, (message) => {
         setLogs((current) => [...current, message].slice(-250));
-      });
+      }, action === "run" ? count : 1);
     },
-    onSuccess: (_result, action) => {
-      toast.success(t(`elevenLabs.registration.${action === "run" ? "registered" : "checkPassed"}`));
+    onSuccess: (result, action) => {
+      if (action === "run" && (result.requested ?? 1) > 1) {
+        toast.success(t("elevenLabs.registration.batchReady", { succeeded: result.succeeded ?? 0, requested: result.requested ?? 0 }));
+      } else {
+        toast.success(t(`elevenLabs.registration.${action === "run" ? "registered" : "checkPassed"}`));
+      }
       void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-status"] });
       if (action === "run") void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-accounts"] });
     },
@@ -353,8 +360,13 @@ function RegistrationWorkspace() {
   }, [logs]);
 
   async function copyCredentials(): Promise<void> {
-    if (!result?.email || !result.password) return;
-    await navigator.clipboard.writeText(`${result.email}\n${result.password}`);
+    const accounts = result?.accounts?.length
+      ? result.accounts
+      : result?.email && result.password
+        ? [{ email: result.email, password: result.password, authenticated: result.authenticated === true }]
+        : [];
+    if (accounts.length === 0) return;
+    await navigator.clipboard.writeText(accounts.map((account) => `${account.email}\t${account.password}`).join("\n"));
     toast.success(t("common.copied"));
   }
 
@@ -409,7 +421,24 @@ function RegistrationWorkspace() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 border-b pb-6">
+      <div className="flex flex-wrap items-end gap-3 border-b pb-6">
+        <div className="space-y-1.5">
+          <Label htmlFor="elevenlabs-register-count">{t("elevenLabs.registration.count")}</Label>
+          <Input
+            id="elevenlabs-register-count"
+            className="h-8 w-24"
+            type="number"
+            min={1}
+            max={MAX_REGISTRATION_COUNT}
+            value={count}
+            disabled={actionMutation.isPending}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (!Number.isFinite(next)) return;
+              setCount(Math.min(MAX_REGISTRATION_COUNT, Math.max(1, Math.trunc(next))));
+            }}
+          />
+        </div>
         <Button variant="secondary" size="sm" disabled={!ready || actionMutation.isPending} onClick={() => actionMutation.mutate("preflight")}>
           {actionMutation.isPending && actionMutation.variables === "preflight" ? <Spinner /> : <Network />}{t("elevenLabs.registration.preflight")}
         </Button>
@@ -417,12 +446,33 @@ function RegistrationWorkspace() {
           {actionMutation.isPending && actionMutation.variables === "dry-run" ? <Spinner /> : <FlaskConical />}{t("elevenLabs.registration.dryRun")}
         </Button>
         <Button size="sm" disabled={!ready || actionMutation.isPending || status?.running} onClick={() => setConfirmOpen(true)}>
-          {actionMutation.isPending && actionMutation.variables === "run" ? <Spinner /> : <UserPlus />}{t("elevenLabs.registration.registerOne")}
+          {actionMutation.isPending && actionMutation.variables === "run" ? <Spinner /> : <UserPlus />}{count > 1 ? t("elevenLabs.registration.registerMany", { count }) : t("elevenLabs.registration.registerOne")}
         </Button>
         <span className="text-xs text-muted-foreground">{t("elevenLabs.registration.connection", { value: status?.connection || "direct" })}</span>
       </div>
 
-      {result?.email && result.password ? (
+      {result?.accounts && result.accounts.length > 0 ? (
+        <section className="space-y-3 border-l-2 border-emerald-500/70 bg-emerald-500/5 px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t("elevenLabs.registration.batchReady", { succeeded: result.succeeded ?? result.accounts.length, requested: result.requested ?? result.accounts.length })}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("elevenLabs.registration.batchHint")}</p>
+            </div>
+            <Button variant="ghost" size="icon" className="size-8" onClick={() => void copyCredentials()} aria-label={t("common.copy")}><Clipboard /></Button>
+          </div>
+          <div className="space-y-2">
+            {result.accounts.map((account) => (
+              <div key={account.email} className="min-w-0">
+                <p className="truncate font-mono text-xs">{account.email}</p>
+                <p className="truncate font-mono text-xs text-muted-foreground">{account.password}</p>
+              </div>
+            ))}
+          </div>
+          {(result.failures ?? []).length > 0 ? (
+            <p className="text-xs text-destructive">{t("elevenLabs.registration.batchFailed", { count: result.failed ?? result.failures?.length ?? 0 })}</p>
+          ) : null}
+        </section>
+      ) : result?.email && result.password ? (
         <section className="space-y-3 border-l-2 border-emerald-500/70 bg-emerald-500/5 px-4 py-4">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -548,12 +598,12 @@ function RegistrationWorkspace() {
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("elevenLabs.registration.confirmTitle")}</DialogTitle>
-            <DialogDescription>{t("elevenLabs.registration.confirmDescription", { provider: captchaProviderLabel })}</DialogDescription>
+            <DialogTitle>{count > 1 ? t("elevenLabs.registration.confirmManyTitle", { count }) : t("elevenLabs.registration.confirmTitle")}</DialogTitle>
+            <DialogDescription>{t(count > 1 ? "elevenLabs.registration.confirmManyDescription" : "elevenLabs.registration.confirmDescription", { provider: captchaProviderLabel, count })}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(false)}>{t("common.cancel")}</Button>
-            <Button size="sm" onClick={() => { setConfirmOpen(false); actionMutation.mutate("run"); }}><UserPlus />{t("elevenLabs.registration.registerOne")}</Button>
+            <Button size="sm" onClick={() => { setConfirmOpen(false); actionMutation.mutate("run"); }}><UserPlus />{count > 1 ? t("elevenLabs.registration.registerMany", { count }) : t("elevenLabs.registration.registerOne")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -620,7 +670,7 @@ function RegistrationQuota({ account, locale, t }: { account: ElevenLabsRegistra
 }
 
 const EMPTY_RUNTIME_FORM: ElevenLabsRuntimeConfigInput = {
-  apiKey: "", clearAPIKey: false, apiBaseURL: "https://api.us.elevenlabs.io", proxyURL: "",
+  apiKey: "", clearAPIKey: false, apiBaseURL: "https://api.us.elevenlabs.io", proxyURL: "", dynamicProxyAPI: "", clearDynamicProxyAPI: false,
   requestTimeout: 60, generationTimeout: 240, registrationTimeout: 600,
   captchaProvider: "yescaptcha",
   yesCaptchaAPIKey: "", clearYesCaptchaAPIKey: false, yesCaptchaEndpoint: "https://api.yescaptcha.com",
@@ -641,6 +691,7 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
   const [form, setForm] = useState<ElevenLabsRuntimeConfigInput>(() => ({
     ...EMPTY_RUNTIME_FORM,
     apiBaseURL: config.apiBaseURL,
+    dynamicProxyAPI: "",
     requestTimeout: config.requestTimeout,
     generationTimeout: config.generationTimeout,
     registrationTimeout: config.registrationTimeout,
@@ -694,7 +745,10 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
               <Input id="elevenlabs-runtime-api-base" value={form.apiBaseURL} onChange={(event) => setForm((current) => ({ ...current, apiBaseURL: event.target.value }))} />
             </Field>
             <Field label={t("elevenLabs.runtime.proxyURL")} htmlFor="elevenlabs-runtime-proxy">
-              <Input id="elevenlabs-runtime-proxy" value={form.proxyURL} onChange={(event) => setForm((current) => ({ ...current, proxyURL: event.target.value }))} placeholder={config?.proxyConfigured ? config.proxyLabel : t("elevenLabs.runtime.directPlaceholder")} />
+              <Input id="elevenlabs-runtime-proxy" value={form.proxyURL} onChange={(event) => setForm((current) => ({ ...current, proxyURL: event.target.value }))} placeholder={config?.proxyConfigured && !config.dynamicProxyConfigured ? config.proxyLabel : t("elevenLabs.runtime.directPlaceholder")} />
+            </Field>
+            <Field label={t("elevenLabs.runtime.dynamicProxyAPI")} htmlFor="elevenlabs-runtime-dynamic-proxy">
+              <Input id="elevenlabs-runtime-dynamic-proxy" value={form.dynamicProxyAPI} onChange={(event) => setForm((current) => ({ ...current, dynamicProxyAPI: event.target.value }))} placeholder={config?.dynamicProxyConfigured ? t("elevenLabs.runtime.keepSecret") : "https://white.1024proxy.com/white/api?region=Rand&num=1&time=10&format=1&type=txt"} />
             </Field>
             <Field label={t("elevenLabs.runtime.requestTimeout")} htmlFor="elevenlabs-runtime-request-timeout">
               <Input id="elevenlabs-runtime-request-timeout" type="number" min={5} max={300} value={form.requestTimeout} onChange={(event) => setForm((current) => ({ ...current, requestTimeout: Number(event.target.value) }))} />

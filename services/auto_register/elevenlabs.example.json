@@ -2,6 +2,7 @@
   "provider": "elevenlabs",
   "proxy": {
     "url": "",
+    "api_url": "",
     "require_proxy": false,
     "preflight_url": "https://elevenlabs.io/app/sign-up",
     "connect_timeout_sec": 15

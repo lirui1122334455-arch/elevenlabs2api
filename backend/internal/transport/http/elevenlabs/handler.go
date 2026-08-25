@@ -92,11 +92,16 @@ func (h *Handler) registrationDryRun(c *gin.Context)    { h.registrationAction(c
 func (h *Handler) registrationRun(c *gin.Context)       { h.registrationAction(c, "register") }
 
 func (h *Handler) registrationAction(c *gin.Context, action string) {
-	if strings.Contains(strings.ToLower(c.GetHeader("Accept")), "text/event-stream") {
-		h.registrationActionStream(c, action)
+	count, err := registrationCountFromRequest(c, action)
+	if err != nil {
+		h.writeError(c, err)
 		return
 	}
-	result, err := h.service.RegistrationAction(c.Request.Context(), action)
+	if strings.Contains(strings.ToLower(c.GetHeader("Accept")), "text/event-stream") {
+		h.registrationActionStream(c, action, count)
+		return
+	}
+	result, err := h.service.RegistrationAction(c.Request.Context(), action, count)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -104,8 +109,8 @@ func (h *Handler) registrationAction(c *gin.Context, action string) {
 	response.Success(c, http.StatusOK, result)
 }
 
-func (h *Handler) registrationActionStream(c *gin.Context, action string) {
-	stream, err := h.service.RegistrationActionStream(c.Request.Context(), action)
+func (h *Handler) registrationActionStream(c *gin.Context, action string, count int) {
+	stream, err := h.service.RegistrationActionStream(c.Request.Context(), action, count)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -120,9 +125,9 @@ func (h *Handler) registrationActionStream(c *gin.Context, action string) {
 
 	buffer := make([]byte, 16<<10)
 	for {
-		count, readErr := stream.Body.Read(buffer)
-		if count > 0 {
-			if _, writeErr := c.Writer.Write(buffer[:count]); writeErr != nil {
+		n, readErr := stream.Body.Read(buffer)
+		if n > 0 {
+			if _, writeErr := c.Writer.Write(buffer[:n]); writeErr != nil {
 				return
 			}
 			c.Writer.Flush()
@@ -193,6 +198,20 @@ func (h *Handler) forwardJSON(c *gin.Context, path string) {
 		return
 	}
 	response.Success(c, http.StatusOK, result)
+}
+
+func registrationCountFromRequest(c *gin.Context, action string) (int, error) {
+	if action != "register" {
+		_, _ = io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+		return 1, nil
+	}
+	var input struct {
+		Count int `json:"count"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil && !errors.Is(err, io.EOF) {
+		return 0, &elevenlabsapp.GatewayError{Status: http.StatusBadRequest, Code: "invalidRequest", Message: "请求参数无效"}
+	}
+	return elevenlabsapp.NormalizeRegistrationCount(input.Count)
 }
 
 func requestPayload(c *gin.Context) (map[string]any, bool) {

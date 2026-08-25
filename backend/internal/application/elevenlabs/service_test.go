@@ -136,7 +136,7 @@ func TestRegistrationActionStreamForwardsEventsAndAuthorization(t *testing.T) {
 	defer server.Close()
 
 	service := NewService("", "", server.URL, "register-secret")
-	stream, err := service.RegistrationActionStream(context.Background(), "preflight")
+	stream, err := service.RegistrationActionStream(context.Background(), "preflight", 1)
 	if err != nil {
 		t.Fatalf("stream error = %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRegistrationActionStreamPreservesUpstreamError(t *testing.T) {
 	defer server.Close()
 
 	service := NewService("", "", server.URL, "")
-	_, err := service.RegistrationActionStream(context.Background(), "register")
+	_, err := service.RegistrationActionStream(context.Background(), "register", 1)
 	gatewayErr, ok := err.(*GatewayError)
 	if !ok || gatewayErr.Status != http.StatusConflict || gatewayErr.Code != "registration_busy" {
 		t.Fatalf("error = %#v", err)
@@ -194,5 +194,36 @@ func TestRegistrationAccountsAndQuotaRefresh(t *testing.T) {
 	}
 	if _, err := service.RefreshRegistrationAccount(context.Background(), "invalid"); err == nil {
 		t.Fatal("expected invalid account id error")
+	}
+}
+
+func TestRegistrationActionForwardsBatchCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/register" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["count"] != float64(3) {
+			t.Fatalf("payload = %#v", payload)
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"ok": true, "requested": 3, "succeeded": 2, "failed": 1,
+			"email": "two@example.com", "password": "secret", "authenticated": true,
+			"accounts": []map[string]any{
+				{"email": "one@example.com", "password": "one", "authenticated": true},
+				{"email": "two@example.com", "password": "two", "authenticated": true},
+			},
+			"failures": []map[string]any{{"index": 2, "message": "captcha failed"}},
+		})
+	}))
+	defer server.Close()
+
+	service := NewService("", "", server.URL, "")
+	result, err := service.RegistrationAction(context.Background(), "register", 3)
+	if err != nil || result.Requested != 3 || result.Succeeded != 2 || len(result.Accounts) != 2 || result.Failures[0].Index != 2 {
+		t.Fatalf("result = %#v, err = %v", result, err)
 	}
 }
