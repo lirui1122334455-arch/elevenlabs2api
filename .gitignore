@@ -11,6 +11,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+/docker-compose.override.yml
 /config.yaml
 /config.local.yaml
 /config.*.local.yaml
@@ -50,7 +51,10 @@ Thumbs.db
 # Auto-register runtime secrets / artifacts
 services/auto_register/proxies.txt
 services/auto_register/engine/sso_output/
-services/auto_register/.venv/
+services/auto_register/.venv*/
+services/auto_register/data/elevenlabs-profile/
+services/auto_register/data/elevenlabs-credentials.json
+services/auto_register/elevenlabs.local.json
 services/auto_register/__pycache__/
 services/auto_register/**/__pycache__/
 __pycache__/

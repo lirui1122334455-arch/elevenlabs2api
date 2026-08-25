@@ -162,6 +162,23 @@ export async function apiRequest<T>(path: string, options: RequestOptions, decod
   return parseResponse(response, decode);
 }
 
+export async function apiBlobRequest(path: string, options: RequestOptions, retryAuth = true): Promise<Blob> {
+  const response = await sendApiRequest(path, options);
+  if (response.status === 401 && options.authenticated !== false && retryAuth) {
+    const refreshResult = await refreshAccessToken();
+    if (refreshResult === "refreshed") {
+      return apiBlobRequest(path, options, false);
+    }
+    if (refreshResult === "unavailable") {
+      throw new ApiError(503, "sessionRefreshUnavailable", localizedErrorMessage("sessionRefreshUnavailable", "Unable to refresh the session. Please retry."));
+    }
+  }
+  if (!response.ok) {
+    await parseResponse(response, decodeNever);
+  }
+  return response.blob();
+}
+
 export type ApiStreamEvent<T> = {
   event: string;
   data: T;

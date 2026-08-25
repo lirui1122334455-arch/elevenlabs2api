@@ -73,6 +73,7 @@ class FingerprintTransport:
             impersonate=impersonate,
             http_version=http_version,
             ja3=DEFAULT_JA3,
+            trust_env=False,
         )
         # Make sure default Accept-Encoding is exactly the Chrome order.
         self._session.headers["accept-encoding"] = accept_encoding

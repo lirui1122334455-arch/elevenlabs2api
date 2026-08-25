@@ -378,7 +378,10 @@ class XConsoleAuthClient:
              distinctive).
         """
         # 1. collect all JS chunk URLs from the page
-        js_urls = list(set(re.findall(r'src="(/_next/static/chunks/[^"]+\.js)"', html)))
+        js_urls = list(dict.fromkeys(re.findall(
+            r'''src=["'](/_next/static/chunks/[^"']+\.js(?:\?[^"']*)?)["']''',
+            html,
+        )))
         if self.debug:
             print(f"  [scrape] searching {len(js_urls)} JS chunks...")
 
@@ -391,6 +394,11 @@ class XConsoleAuthClient:
             else:
                 rest.append(url)
         ordered = priority + rest
+        if not ordered:
+            raise RuntimeError(
+                "Could not find any Next.js JavaScript chunks on the sign-up page. "
+                "The page may be a challenge/error response or its script markup changed."
+            )
 
         # 3. fetch chunks in parallel and search for action hashes.
         # We collect ALL results and pick the best one (sign-up chunk > any).

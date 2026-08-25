@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY protocol_register.py server.py ./
 COPY engine ./engine
+COPY elevenlabs_assisted ./elevenlabs_assisted
 
 EXPOSE 8091
 CMD ["python", "server.py"]

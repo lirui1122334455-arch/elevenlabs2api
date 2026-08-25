@@ -347,6 +347,21 @@ class CloudTempMailReceiver:
             time.sleep(poll)
         raise RuntimeError("timeout waiting for xAI email verification code")
 
+    def wait_for_verification_link(
+        self,
+        timeout: float = 180,
+        emit: Callable[[str], None] | None = None,
+        allowed_hosts: list[str] | tuple[str, ...] | set[str] = (),
+    ) -> str:
+        from elevenlabs_assisted.mailbox_link import wait_for_cloudflare_verification_link
+
+        return wait_for_cloudflare_verification_link(
+            self,
+            timeout=timeout,
+            allowed_hosts=allowed_hosts,
+            emit=emit,
+        )
+
 
 def create_cloudflare_mailbox(
     config: dict,
@@ -724,6 +739,21 @@ class YydsMailReceiver:
         raise RuntimeError(
             "timeout waiting for xAI email verification code (YYDS). "
             "Public shared domains are often blocked by xAI — set your self-hosted domain in mailDomains."
+        )
+
+    def wait_for_verification_link(
+        self,
+        timeout: float = 180,
+        emit: Callable[[str], None] | None = None,
+        allowed_hosts: list[str] | tuple[str, ...] | set[str] = (),
+    ) -> str:
+        from elevenlabs_assisted.mailbox_link import wait_for_yyds_verification_link
+
+        return wait_for_yyds_verification_link(
+            self,
+            timeout=timeout,
+            allowed_hosts=allowed_hosts,
+            emit=emit,
         )
 
 

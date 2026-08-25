@@ -307,6 +307,82 @@ class YesCaptchaSolver:
             + " | ".join(errors[:4])
         )
 
+    def solve_hcaptcha(
+        self,
+        website_url: str,
+        website_key: str,
+        *,
+        invisible: bool = True,
+        user_agent: Optional[str] = None,
+        proxy: Optional[dict] = None,
+        rqdata: Optional[str] = None,
+        enterprise: bool = False,
+    ) -> str:
+        """Solve an hCaptcha challenge and return the response token.
+
+        Tries a proxied task first when proxy fields are provided, then
+        HCaptchaTaskProxyless. The token itself is never logged.
+        """
+        website_url = (website_url or "").strip()
+        website_key = (website_key or "").strip()
+        if not website_url or not website_key:
+            raise ValueError("website_url and website_key are required for hCaptcha")
+
+        base: dict = {
+            "websiteURL": website_url,
+            "websiteKey": website_key,
+            "isInvisible": bool(invisible),
+        }
+        if user_agent:
+            base["userAgent"] = user_agent
+        if enterprise:
+            base["isEnterprise"] = True
+        if rqdata:
+            base["rqdata"] = rqdata
+            base["enterprisePayload"] = {"rqdata": rqdata}
+
+        tasks: list[dict] = []
+        if proxy:
+            proxied = {"type": "HCaptchaTask", **base}
+            for key, value in proxy.items():
+                if value not in {None, ""}:
+                    proxied[key] = value
+            tasks.append(proxied)
+        tasks.append({"type": "HCaptchaTaskProxyless", **base})
+
+        errors: list[str] = []
+        for idx, task in enumerate(tasks):
+            task_type = str(task.get("type") or "hcaptcha")
+            try:
+                self._progress(
+                    f"solve_hcaptcha try {idx + 1}/{len(tasks)} "
+                    f"type={task_type} url={website_url} key={website_key[:8]}..."
+                )
+                task_id = self._create_task(task)
+                result = self._get_result(task_id)
+                solution = result.get("solution") or {}
+                token = (
+                    solution.get("gRecaptchaResponse")
+                    or solution.get("token")
+                    or solution.get("respKey")
+                )
+                if not token:
+                    raise RuntimeError("YesCaptcha returned no hCaptcha token")
+                return str(token)
+            except Exception as e:  # noqa: BLE001
+                msg = f"{task_type}: {e}"
+                errors.append(msg)
+                self._progress(f"failed: {msg}")
+                if idx + 1 < len(tasks):
+                    time.sleep(1.0)
+                    continue
+                break
+
+        raise RuntimeError(
+            "YesCaptcha hCaptcha solve failed after fallbacks: "
+            + " | ".join(errors[:4])
+        )
+
     def solve_cloudflare_challenge(
         self,
         website_url: str,

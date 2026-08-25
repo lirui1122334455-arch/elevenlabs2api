@@ -15,6 +15,7 @@ import (
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	dashboardapp "github.com/chenyme/grok2api/backend/internal/application/dashboard"
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
+	elevenlabsapp "github.com/chenyme/grok2api/backend/internal/application/elevenlabs"
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
@@ -26,6 +27,7 @@ import (
 	clientkeyhttp "github.com/chenyme/grok2api/backend/internal/transport/http/clientkey"
 	dashboardhttp "github.com/chenyme/grok2api/backend/internal/transport/http/dashboard"
 	egresshttp "github.com/chenyme/grok2api/backend/internal/transport/http/egress"
+	elevenlabshttp "github.com/chenyme/grok2api/backend/internal/transport/http/elevenlabs"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/inference"
 	mediahttp "github.com/chenyme/grok2api/backend/internal/transport/http/media"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
@@ -62,6 +64,7 @@ type Dependencies struct {
 	Settings     *settingsapp.Service
 	Egress       *egressapp.Service
 	AutoRegister *autoregisterapp.Service
+	ElevenLabs   *elevenlabsapp.Service
 }
 
 type ReadinessComponent struct {
@@ -151,6 +154,7 @@ func New(deps Dependencies) *gin.Engine {
 	settingshttp.NewHandler(deps.Settings).Register(adminProtected)
 	egresshttp.NewHandler(deps.Egress).Register(adminProtected)
 	autoregisterhttp.NewHandler(deps.AutoRegister).Register(adminProtected)
+	elevenlabshttp.NewHandler(deps.ElevenLabs).Register(adminProtected)
 	systemhttp.NewHandler(func() string {
 		if deps.Settings != nil {
 			return deps.Settings.PublicAPIBaseURL()

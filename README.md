@@ -1,357 +1,102 @@
-<p align="center">
-  <img alt="Grok2API" src="./frontend/public/grok2api.png" width="720" />
-</p>
+# ElevenLabs Console
 
-<p align="center">
-  <strong>面向 Grok Build、Grok Web 与 Grok Console 的多账号 API 网关</strong>
-</p>
+这是一个本地 ElevenLabs 注册与生成网关控制台。当前部署只提供 ElevenLabs 页面，不启动旧的自动补号服务，也不在界面中暴露原项目的账号、模型、图库或仪表盘入口。
 
-<p align="center">
-  <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
-  <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/chenyme/grok2api"><img alt="Upstream" src="https://img.shields.io/badge/upstream-chenyme%2Fgrok2api-blue?logo=github" /></a>
-</p>
+管理端基础框架改造自 [chenyme/grok2api](https://github.com/chenyme/grok2api)，原作者为 [Chenyme](https://github.com/chenyme)，许可证见 [LICENSE](./LICENSE)。本仓库仅复用其 Go 管理鉴权和 React 工程基础，ElevenLabs 注册及网关作为独立服务运行。
 
-> [!IMPORTANT]
-> **原作者 / Upstream**  
-> 本仓库基于 **[chenyme/grok2api](https://github.com/chenyme/grok2api)** 二次开发。  
-> - 原作者：**[Chenyme](https://github.com/chenyme)**  
-> - 上游仓库：https://github.com/chenyme/grok2api  
-> - 许可证：MIT（见 [LICENSE](./LICENSE)，Copyright © 2026 Chenyme）  
->  
-> 请优先 star / 关注上游项目。本 fork 主要增加 **协议自动补号（注册机）** 等能力，网关主体功能仍归功于原作者。
+## 功能
 
-> [!NOTE]
-> 本项目仅供学习与研究交流。请务必遵循 Grok 的使用条款及当地法律法规，不得用于非法用途！
-
-Grok2API 是一个纯 Go 实现的 Grok API 网关。项目将 Grok Build OAuth、Grok Web SSO 与 Grok Console SSO 组织为独立账号池，对外提供 OpenAI 风格接口、Anthropic Messages 兼容接口，以及账号、模型、密钥、用量和代理管理后台。
-
-## 功能概览
-
-- **三 Provider**：`grok_build`、`grok_web` 与 `grok_console` 独立路由、额度和故障状态
-- **标准接口**：Responses、Chat Completions、Images、异步 Videos、Anthropic Messages
-- **多账号调度**：优先级、并发限制、额度门控、会话粘滞、冷却与故障切换
-- **账号接入**：Device OAuth、OAuth JSON、SSO JSON、逐行 SSO Token
-- **协议自动补号（注册机）**：Web 号池不足时自动注册并导入 SSO（详见 [docs/AUTO_REGISTER.md](./docs/AUTO_REGISTER.md)）
-- **媒体能力**：图片生成、图片编辑、视频生成、图片本地归档与 URL/Base64 返回
-- **基础设施**：SQLite/PostgreSQL、Memory/Redis、HTTP 与 SOCKS 代理池
-- **安全边界**：AES-256-GCM 凭据加密、客户端密钥哈希、日志脱敏、SSRF 与传输上限
-- **管理后台**：Dashboard、账号、模型、客户端密钥、请求审计、接口文档与热加载设置
+- ElevenLabs 单账号注册：YYDS 自有域名邮箱、可选 YesCaptcha / Captcha Gateway、邮箱验证和登录确认。
+- 注册实时日志：持续显示验证码、Stripe 风控、注册请求、邮箱轮询、验证及登录阶段。
+- 注册账号列表：保存并显示邮箱、密码、套餐、积分额度和重置时间，支持单账号额度刷新。
+- 无副作用检查：网络预检及浏览器干跑均不会创建邮箱或提交注册。
+- 运行配置：ElevenLabs API Key、可选代理、超时、打码供应商及独立密钥、YYDS 和邮箱域名。
+- 生成网关：Sound Effects，以及实验性的 GPT Image 2 图片通道。
+- 密钥隔离：运行密钥写入本地 Docker 卷，接口只返回“是否已配置”。
+- 默认直连：未配置代理时明确使用 `direct`，不继承系统代理。
 
 ## 架构
 
-```mermaid
-flowchart LR
-    Client["API Client"] --> Gateway["Go Gateway"]
-    Admin["React Admin"] --> Gateway
-
-    Gateway --> Router["Model Router"]
-    Router --> Build["Grok Build"]
-    Router --> Web["Grok Web"]
-    Router --> Console["Grok Console"]
-
-    Build --> BuildPool["OAuth Account Pool"]
-    Web --> WebPool["SSO Account Pool"]
-    Console --> ConsolePool["SSO Account Pool"]
-    Build --> Egress["Egress Pool"]
-    Web --> Egress
-    Console --> Egress
-
-    Gateway --> Database["SQLite / PostgreSQL"]
-    Gateway --> Runtime["Memory / Redis"]
-    Gateway --> Media["Media Storage"]
+```text
+Browser /elevenlabs
+        |
+        v
+Go admin/auth adapter :18000
+        |--------------------------|
+        v                          v
+ElevenLabs gateway :18092    Registration service :18093
+        |                          |
+        v                          +--> YYDS Mail
+ElevenLabs API                    +--> YesCaptcha / Captcha Gateway
+                                   +--> Playwright -> elevenlabs.io
 ```
 
-## 快速部署
+`18092` 和 `18093` 只绑定到宿主机 `127.0.0.1`。浏览器通过带管理员鉴权的 `/api/admin/v1/elevenlabs/*` 接口访问两个 sidecar。
 
-### Docker Compose
+## 启动
 
-1. 准备配置：
+仓库根目录执行：
 
-```bash
-# 上游原版（推荐关注）
-git clone https://github.com/chenyme/grok2api.git
-# 或本 fork（含协议自动补号；将 <owner> 换成你的 GitHub 用户名/组织）
-# git clone https://github.com/<owner>/grok2api.git
-cd grok2api
-cp config.example.yaml config.yaml
-# 切勿把填好密钥的 config.yaml 提交到 Git
+```powershell
+docker compose up -d --build --remove-orphans
 ```
 
-2. 生成并填写安全密钥：
+打开 <http://127.0.0.1:18000/elevenlabs>，使用 `config.yaml` 中配置的管理员账号登录。
 
-```bash
-openssl rand -hex 32
-openssl rand -base64 32
+当前 Compose 服务：
+
+| 服务 | 作用 | 宿主机地址 |
+| --- | --- | --- |
+| `console` | 管理鉴权与 ElevenLabs API 适配层 | `http://127.0.0.1:18000` |
+| `elevenlabs-gateway` | 生成网关及共享运行配置 | `http://127.0.0.1:18092` |
+| `elevenlabs-register` | 浏览器注册服务 | `http://127.0.0.1:18093` |
+
+查看状态：
+
+```powershell
+docker compose ps
+docker compose logs -f elevenlabs-register
 ```
 
-```yaml
-secrets:
-  jwtSecret: "替换为 hex 随机值"
-  credentialEncryptionKey: "替换为 Base64 随机密钥"
+## 首次配置
 
-bootstrapAdmin:
-  username: "admin"
-  password: "替换为强密码"
-```
+进入“运行配置”页：
 
-3. 启动：
+1. ElevenLabs API Key 只用于声音和图片生成；没有 Key 时注册机仍可使用，生成按钮保持禁用。
+2. 代理留空即直连。只有确实需要其他出口时才填写完整的 HTTP/HTTPS/SOCKS URL。
+3. 选择 YesCaptcha 或 Captcha Gateway，填写所选供应商的 Key，再填写 YYDS Key 和已验证的自有邮箱域名。
+4. 点击“验证配置”，分别检查 ElevenLabs 网络、API Key、当前打码供应商和 YYDS。
+5. 在“注册机”页先运行“网络预检”和“浏览器预检”，再决定是否执行真实注册。
 
-```bash
-docker compose pull
-docker compose up -d
-```
+真实注册会创建邮箱、调用验证码服务并向 ElevenLabs 提交账号，界面会在执行前二次确认。成功后的邮箱、密码和额度快照保存在本地 `elevenlabs-media` Docker 卷中，不会写入 Git。账号列表只在管理员页面和受鉴权的管理接口中提供，捕获的账号 API Key 不会返回给浏览器。
 
-访问 `http://127.0.0.1:8000`。
+## 当前状态
 
-官方镜像已经包含前端构建产物，管理端与 API 由同一个 Go 服务提供。Compose 默认将 `config.yaml` 只读挂载到容器，并使用 `grok2api-data` 命名卷保存 SQLite 数据库和本地媒体。
+- 直连 ElevenLabs 已验证为 HTTP 200。
+- YesCaptcha 和 YYDS 凭据已通过只读验证；Captcha Gateway 已接入并配置，Key 会在首次真实求解时校验。
+- 浏览器干跑已验证注册页定位符及 hCaptcha widget 捕获且未提交表单。
+- 拦截式无副作用诊断已验证 hCaptcha 的 React 异步执行结果能够触发 `/v1/user/pre-sign-up`，不会创建账号。
+- 注册账号列表、密码显隐和额度展示已接通；真实注册成功后会自动出现记录。
+- ElevenLabs API Key 尚未配置，因此生成网关在线但计费生成不可用。
+- 尚未自动执行一次真实账号注册；该动作留给管理页中的明确确认。
 
-常用命令：
+## 测试
 
-```bash
-docker compose logs -f grok2api
-docker compose restart grok2api
-docker compose down
-```
-
-### 源码运行
-
-后端：
-
-```bash
-cp config.example.yaml config.yaml
-cd backend
-go run ./cmd/grok2api
-```
-
-前端开发服务器：
-
-```bash
+```powershell
 cd frontend
-pnpm install
-pnpm dev
-```
-
-前端默认运行于 `http://127.0.0.1:5173`，并将 API 请求代理到 `http://127.0.0.1:8000`。
-
-## 首次使用
-
-1. 使用 `bootstrapAdmin` 配置的管理员登录。
-2. 在“上游账号”中接入 Grok Build、Grok Web 或 Grok Console 账号。
-3. 等待本次额度和模型能力同步完成。
-4. 在“模型管理”中确认对外模型名称与启用状态。
-5. 在“客户端密钥”中创建 `g2a_` API Key。
-6. 使用该密钥调用 `/v1/*`。
-
-首次管理员创建后，建议修改管理员密码并从 `config.yaml` 删除 `bootstrapAdmin` 段。`credentialEncryptionKey` 必须长期保留，更换后已有凭据将无法解密。
-
-## 协议自动补号（注册机）
-
-本 fork 增加了 **协议注册自动补号**：当可调度 Grok Build 账号低于目标时，网关调度 Python sidecar 通过临时邮箱 +（可选）打码完成 `accounts.x.ai` 注册，提取 SSO、转为 Build 并通过真实 chat 验活。
-
-| 项目 | 说明 |
-| :-- | :-- |
-| 入口 | 管理端 **运行设置 → 自动补号** |
-| Sidecar | `services/auto_register`，默认 `http://127.0.0.1:8091`（Compose：`http://auto-register:8091`） |
-| 邮箱 | Cloud Temp Mail / YYDS Mail（**YYDS 请用自托管域名**，公共域易被 xAI 拉黑） |
-| 代理 | 仅在 **出口代理** 配 Grok Web 节点；每号随机 IP，无节点可直连或应急备用代理 |
-| 进度 | 状态卡片显示 `phase` / 进度日志；支持 **立即补号一次** / **停止** |
-| 恢复 | 自动生成的邮箱密码加密保存，在 Web 账号池按需显示；401/403 死号直接删除，临时探测故障保留 Web 凭据 |
-
-**完整说明、配置项、排障与阶段表** → [docs/AUTO_REGISTER.md](./docs/AUTO_REGISTER.md)
-
-Compose 已包含 `auto-register` 服务；源码本地需单独启动 sidecar：
-
-```bash
-cd services/auto_register
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python server.py
-```
-
-## 账号来源
-
-| Provider | 认证方式 | 主要能力 |
-| :-- | :-- | :-- |
-| Grok Build | Device OAuth、OAuth JSON | 原生 Responses、Chat、Messages、Billing、模型同步 |
-| Grok Web | SSO JSON、逐行 SSO Token | Chat、Responses、Messages、图片、图片编辑、视频 |
-| Grok Console | SSO JSON、逐行 SSO Token | 无状态 Responses、兼容 Chat 与 Messages |
-
-Grok Build OAuth 支持按需续期。Grok Web 与 Grok Console 的 SSO 不可自动续期，凭据失效后账号会退出可用号池并等待重新授权。
-
-Grok Web 与 Grok Console 均支持账号列表 JSON，也支持每行一个 Token 的快速导入。账号接入接口会等待本批账号的首次额度与模型能力同步完成后再返回结果。
-
-管理端可复用 Web 账号的同一份 SSO 创建或更新对应的 Console 账号；同步按 Console 身份键幂等执行，不会改变已有 Web/Build 关联。
-
-Grok Console 固定使用 `store: false`，不支持 `previous_response_id`、Response 查询/删除或 `/responses/compact`。多轮调用应像 Codex 无状态链路一样回放完整输入、工具调用和工具结果；网关不会为 Console 响应登记虚假的持久化归属。
-
-## 模型
-
-对外模型名称不带 Provider 前缀，例如 `grok-4.5`。内部上游路由使用 `Build/`、`Web/`、`Console/` 前缀区分实际来源；Grok Build 模型根据账号能力动态同步，请以管理端模型页或 `GET /v1/models` 为准。
-
-升级时会原位迁移内部路由并保留路由主键、客户端密钥权限和旧名称别名。多个来源可以提供同一个对外模型名称；网关会按客户端权限、协议能力和账号可用性选择来源。带 Provider 前缀的名称仍可作为兼容入口，用于显式指定渠道。
-
-Grok Web 内置模型：
-
-| 模型 | 能力 | 最低等级 |
-| :-- | :-- | :-- |
-| `grok-chat-fast` | Chat / Responses / Messages | Basic |
-| `grok-chat-auto` | Chat / Responses / Messages | Super |
-| `grok-chat-expert` | Chat / Responses / Messages | Super |
-| `grok-chat-heavy` | Chat / Responses / Messages | Heavy |
-| `grok-imagine-image` | Fast 图片生成 | Basic |
-| `grok-imagine-image-quality` | Quality 图片生成 | Super |
-| `grok-imagine-image-edit` | 图片编辑 | Super |
-| `grok-imagine-video` | 视频生成 | Super |
-
-Grok Console 内置模型：
-
-| 模型 | 能力 |
-| :-- | :-- |
-| `grok-4.3` | Responses / Chat / Messages |
-| `grok-4.20-0309` | Responses / Chat / Messages |
-| `grok-4.20-0309-reasoning` | Responses / Chat / Messages |
-| `grok-4.20-0309-non-reasoning` | Responses / Chat / Messages |
-| `grok-4.20-multi-agent-0309` | Responses / Chat / Messages |
-| `grok-build-0.1` | Responses / Chat / Messages |
-
-`grok-4.5` 不由 Grok Console Provider 注册；即使由 Web SSO 同步创建 Console 账号，该模型在 Console 中仍不可用。
-
-Console 上游路由始终使用 `Console/` 内部前缀，不再根据启动顺序生成 `-console` 冲突后缀。升级产生的兼容别名不会出现在 `GET /v1/models`。
-
-同名模型会在当前可用来源中自动选路；来源选定后，账号故障切换只发生在该 Provider 的账号池内。
-
-## API
-
-除健康检查和公开图片外，所有 `/v1` 接口都需要客户端 API Key：
-
-```http
-Authorization: Bearer g2a_xxx_xxx
-```
-
-| 方法 | 路径 | 说明 |
-| :-- | :-- | :-- |
-| `GET` | `/healthz` | 存活检查 |
-| `GET` | `/readyz` | 就绪检查 |
-| `GET` | `/v1/models` | 当前可服务模型 |
-| `POST` | `/v1/responses` | Responses JSON / SSE |
-| `POST` | `/v1/responses/compact` | Responses compact |
-| `GET` | `/v1/responses/{id}` | 查询 Response |
-| `DELETE` | `/v1/responses/{id}` | 删除 Response |
-| `POST` | `/v1/chat/completions` | Chat Completions JSON / SSE |
-| `POST` | `/v1/messages` | Anthropic Messages JSON / SSE |
-| `POST` | `/v1/images/generations` | 图片生成 |
-| `POST` | `/v1/images/edits` | 图片编辑 |
-| `GET` | `/v1/media/images/{id}` | 公开归档图片 |
-| `POST` | `/v1/videos/generations` | 创建视频任务 |
-| `GET` | `/v1/videos/{request_id}` | 查询视频任务 |
-
-Responses 资源查询、删除和 compact 的实际可用性取决于目标模型所属 Provider；Grok Console 仅支持无状态 `POST /v1/responses`。
-
-管理端登录后可在 `/docs` 查看当前 Base URL、可用模型以及 cURL、Python 和 JavaScript 示例。开发环境还可以在 `config.yaml` 设置 `server.swaggerEnabled: true`，通过 `/swagger/index.html` 查看公开 API 的 Swagger 文档；生产环境应保持关闭。
-
-最小调用示例：
-
-```bash
-export GROK2API_API_KEY="g2a_xxx_xxx"
-
-curl http://127.0.0.1:8000/v1/responses \
-  -H "Authorization: Bearer $GROK2API_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "grok-chat-auto",
-    "input": "用三句话解释量子隧穿",
-    "stream": true
-  }'
-```
-
-## 配置与存储
-
-根目录 `config.yaml` 保存启动配置：
-
-| 分组 | 说明 |
-| :-- | :-- |
-| `server` | 监听地址、请求体上限、请求生命周期与 Swagger 开关 |
-| `frontend` | 公开 API 地址与静态前端目录 |
-| `database` | SQLite 或 PostgreSQL |
-| `runtimeStore` | Memory 或 Redis |
-| `auth` | 管理员 Token 与安全 Cookie |
-| `secrets` | JWT 与凭据加密密钥 |
-| `provider` | Build/Web/Console 上游默认配置 |
-| `media` | 媒体存储驱动与路径 |
-
-账号、模型、额度、审计、客户端密钥、媒体任务和运行设置始终保存在关系型数据库。Redis 用于限流、并发租约、粘滞路由、分布式锁、额度恢复事件和多实例设置通知。
-
-推荐组合：
-
-| 场景 | 数据库 | 运行态 | 媒体 |
-| :-- | :-- | :-- | :-- |
-| 本地或单实例 | SQLite | Memory | 本地目录 |
-| 多实例 | PostgreSQL | Redis | 共享卷或实例亲和 |
-
-Provider（包括 Console 上游地址与 User-Agent）、服务容量、批量任务并发、路由、媒体、审计和代理参数统一在管理端 `/settings` 修改，不需要直接编辑数据库；除页面明确标记“重启生效”的字段外均会热加载。导入同步、账号转换、数据同步和凭据刷新默认并发均为 `25`，可分别限制为 `1–50`，并支持随机启动延迟；多实例使用 Redis 时，分类上限和总上限均在集群范围内生效。
-
-## 生产部署
-
-- 使用 HTTPS，并设置 `auth.secureCookies: true`
-- 保持 `server.swaggerEnabled: false`
-- 多实例部署使用 PostgreSQL 与 Redis
-- 本地媒体目录在多实例下必须使用共享卷或实例亲和
-- 持久化备份 `config.yaml`、关系型数据库和媒体目录
-- 不要将 OAuth、SSO、Cloudflare Cookie 或账号导出文件提交到 Git
-- 对外暴露前建议配置反向代理、访问日志和基础网络防护
-- 自动补号的邮箱 Key、打码 Key 仅通过管理端配置（加密入库），勿写入仓库
-
-## 致谢与归属
-
-| 角色 | 说明 |
-| :-- | :-- |
-| **原作者** | [Chenyme](https://github.com/chenyme) — [chenyme/grok2api](https://github.com/chenyme/grok2api) |
-| **许可证** | MIT，Copyright (c) 2026 Chenyme（见 [LICENSE](./LICENSE)） |
-| **本 fork** | 在上游之上增加协议自动补号（注册机）、邮箱域名策略与补号进度跟踪等 |
-
-二次分发或再 fork 时请：
-
-1. 保留 `LICENSE` 与原作者版权声明  
-2. 在 README 中标明上游仓库链接  
-3. 勿将密钥、SSO、代理账号提交到公开仓库（见 [SECURITY.md](./SECURITY.md)）  
-
-## 公开使用前
-
-1. 只提交示例配置：`config.example.yaml`、`.env.example`  
-2. 本地复制：`cp config.example.yaml config.yaml` 后填写**自己的**密钥  
-3. 自动补号密钥只在管理端配置，不要写进仓库  
-4. 完整注册机说明：[docs/AUTO_REGISTER.md](./docs/AUTO_REGISTER.md)  
-
-## 相关链接
-
-- 上游项目：https://github.com/chenyme/grok2api  
-- 协议自动补号文档：[docs/AUTO_REGISTER.md](./docs/AUTO_REGISTER.md)  
-- 安全与脱敏：[SECURITY.md](./SECURITY.md)  
-- YYDS Mail 文档：https://vip.215.im/docs
-
-## 开发
-
-后端：
-
-```bash
-cd backend
-go test ./...
-go test -race ./...
-go vet ./...
-go build ./cmd/grok2api
-```
-
-前端：
-
-```bash
-cd frontend
-pnpm install --frozen-lockfile
 pnpm lint
 pnpm build
 ```
 
-## 进一步阅读
+```powershell
+docker run --rm -v "${PWD}/services/auto_register:/app" -w /app elevenlabs-register-local:latest python -m unittest discover -s . -p "test_elevenlabs_*.py"
+docker run --rm -v "${PWD}/services/elevenlabs_gateway:/app" -w /app elevenlabs-gateway-local:latest python -m unittest discover -s . -p "test_*.py"
+```
 
-- [后端说明](./backend/README.md)
-- [前端说明](./frontend/README.md)
+更多说明：
+
+- [注册服务](./docs/ELEVENLABS_REGISTER.md)
+- [生成网关](./docs/ELEVENLABS_GATEWAY.md)
+- [实现状态与风险](./docs/ELEVENLABS_REGISTER_FEASIBILITY.md)
+
+请遵守 ElevenLabs、邮箱服务和验证码服务的使用条款，不要用于批量滥用或规避平台限制。

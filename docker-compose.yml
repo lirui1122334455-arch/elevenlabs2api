@@ -1,15 +1,24 @@
 name: grok2api
 
 services:
-  grok2api:
-    container_name: grok2api
-    image: "${GROK2API_IMAGE:-ghcr.io/chenyme/grok2api:latest}"
+  console:
+    container_name: elevenlabs-console
+    image: "${ELEVENLABS_CONSOLE_IMAGE:-elevenlabs-console-local:latest}"
+    build:
+      context: .
     ports:
-      - "${GROK2API_PORT:-8000}:8000"
+      - "${ELEVENLABS_CONSOLE_PORT:-18000}:8000"
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
+      NO_PROXY: "${ELEVENLABS_CONSOLE_NO_PROXY:-127.0.0.1,localhost,console,elevenlabs-gateway,elevenlabs-register}"
+      ELEVENLABS_GATEWAY_URL: "${ELEVENLABS_GATEWAY_URL:-http://elevenlabs-gateway:8092}"
+      ELEVENLABS_GATEWAY_KEY: "${ELEVENLABS_GATEWAY_KEY:-}"
+      ELEVENLABS_REGISTER_URL: "${ELEVENLABS_REGISTER_URL:-http://elevenlabs-register:8093}"
+      ELEVENLABS_REGISTER_KEY: "${ELEVENLABS_REGISTER_KEY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - "${GROK2API_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
+      - "${ELEVENLABS_CONSOLE_CONFIG:-./config.yaml}:/run/grok2api/config.yaml:ro"
       - grok2api-data:/app/data
     restart: unless-stopped
     init: true
@@ -17,25 +26,31 @@ services:
     security_opt:
       - no-new-privileges:true
     depends_on:
-      auto-register:
+      elevenlabs-gateway:
+        condition: service_healthy
+      elevenlabs-register:
         condition: service_healthy
 
-  # 协议自动补号 sidecar（Cloud Temp Mail + ez-captcha）
-  # 在管理端「设置 → 自动补号」开启；Sidecar 地址填 http://auto-register:8091
-  # 随机 IP：在「设置 → 出口代理」添加多个 Grok Web 节点，每号随机轮训
-  auto-register:
-    container_name: grok2api-auto-register
+  elevenlabs-register:
+    container_name: elevenlabs-register
+    image: elevenlabs-register-local:latest
     build:
-      context: ./services/auto_register
+      context: .
+      dockerfile: services/auto_register/Dockerfile.elevenlabs
     ports:
-      - "${AUTO_REGISTER_PORT:-8091}:8091"
+      - "127.0.0.1:${ELEVENLABS_REGISTER_PORT:-18093}:8093"
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
-      AUTO_REGISTER_PORT: "8091"
+      ELEVENLABS_REGISTER_HOST: "0.0.0.0"
+      ELEVENLABS_REGISTER_PORT: "8093"
+      ELEVENLABS_REGISTER_KEY: "${ELEVENLABS_REGISTER_KEY:-}"
+      ELEVENLABS_RUNTIME_CONFIG_PATH: "/app/data/runtime-config.json"
+    volumes:
+      - elevenlabs-media:/app/data
     restart: unless-stopped
     init: true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8093/healthz', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -43,18 +58,43 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # 如果出口 IP 不干净，可取消以下注释使用 WARP 作为落地代理。
-  # 启用后，在管理端“设置 -> 出口代理”中新增 socks5://warp:1080。
-  # warp:
-  #   container_name: warp
-  #   image: caomingjun/warp:latest
-  #   restart: unless-stopped
-  #   ports:
-  #     - "127.0.0.1:1080:1080"
-  #   environment:
-  #     - WARP_SLEEP=2
-  #   cap_add:
-  #     - NET_ADMIN
+  # ElevenLabs development gateway. The upstream API key is read only from
+  # the local .env/runtime environment and must never be committed.
+  elevenlabs-gateway:
+    container_name: elevenlabs-gateway
+    image: elevenlabs-gateway-local:latest
+    build:
+      context: ./services/elevenlabs_gateway
+    ports:
+      - "127.0.0.1:${ELEVENLABS_GATEWAY_PORT:-18092}:8092"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      ELEVENLABS_GATEWAY_HOST: "0.0.0.0"
+      ELEVENLABS_GATEWAY_PORT: "8092"
+      ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"
+      ELEVENLABS_GATEWAY_KEY: "${ELEVENLABS_GATEWAY_KEY:-}"
+      ELEVENLABS_API_BASE_URL: "${ELEVENLABS_API_BASE_URL:-https://api.us.elevenlabs.io}"
+      ELEVENLABS_PROXY_URL: "${ELEVENLABS_PROXY_URL:-}"
+      ELEVENLABS_PUBLIC_BASE_URL: "${ELEVENLABS_PUBLIC_BASE_URL:-http://127.0.0.1:18092}"
+      ELEVENLABS_MAX_CONCURRENT: "${ELEVENLABS_MAX_CONCURRENT:-1}"
+      ELEVENLABS_GENERATION_TIMEOUT: "${ELEVENLABS_GENERATION_TIMEOUT:-240}"
+      ELEVENLABS_MEDIA_DIR: "/app/data"
+      ELEVENLABS_RUNTIME_CONFIG_PATH: "/app/data/runtime-config.json"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - elevenlabs-media:/app/data
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   grok2api-data:
+  elevenlabs-media:

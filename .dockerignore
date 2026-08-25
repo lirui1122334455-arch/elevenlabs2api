@@ -26,3 +26,16 @@ backend/**/*_test.go
 
 !docker/
 !docker/entrypoint.sh
+
+!services/
+!services/auto_register/
+!services/auto_register/requirements.txt
+!services/auto_register/requirements-elevenlabs.txt
+!services/auto_register/protocol_register.py
+!services/auto_register/elevenlabs_server.py
+!services/auto_register/engine/
+!services/auto_register/engine/**
+!services/auto_register/elevenlabs_assisted/
+!services/auto_register/elevenlabs_assisted/**
+!services/elevenlabs_gateway/
+!services/elevenlabs_gateway/runtime_config.py

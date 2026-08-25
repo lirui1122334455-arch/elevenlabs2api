@@ -31,7 +31,7 @@ export function AnonymousBoundary() {
   if (status === "unavailable") {
     return <SessionUnavailableScreen onRetry={retryRestore} />;
   }
-  return status === "authenticated" ? <Navigate to="/dashboard" replace /> : <Outlet />;
+  return status === "authenticated" ? <Navigate to="/elevenlabs" replace /> : <Outlet />;
 }
 
 function RestoringScreen() {
