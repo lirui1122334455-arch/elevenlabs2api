@@ -30,6 +30,7 @@ import {
   refreshElevenLabsRegistrationAccount,
   streamElevenLabsRegistrationAction,
   updateElevenLabsRuntimeConfig,
+  type ElevenLabsMailProvider,
   type ElevenLabsRuntimeConfigDTO,
   type ElevenLabsRegistrationAccountDTO,
   type ImageGenerationInput,
@@ -45,6 +46,14 @@ const RESOLUTIONS: ImageGenerationInput["resolution"][] = ["1K", "2K", "4K"];
 const QUALITIES: ImageGenerationInput["quality"][] = ["low", "medium", "high"];
 const IMAGE_MODES = ["text", "reference"] as const;
 const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024;
+const EMPTY_RUNTIME_FORM: ElevenLabsRuntimeConfigInput = {
+  apiKey: "", clearAPIKey: false, apiBaseURL: "https://api.us.elevenlabs.io", proxyURL: "", dynamicProxyAPI: "", clearDynamicProxyAPI: false,
+  requestTimeout: 60, generationTimeout: 240, registrationTimeout: 600,
+  captchaProvider: "yescaptcha",
+  yesCaptchaAPIKey: "", clearYesCaptchaAPIKey: false, yesCaptchaEndpoint: "https://api.yescaptcha.com",
+  captchaGatewayAPIKey: "", clearCaptchaGatewayAPIKey: false, captchaGatewayEndpoint: "https://sub.aixiangshu.com",
+  yydsAPIKey: "", clearYYDSAPIKey: false, yydsAPIBase: "https://maliapi.215.im/v1", mailProvider: "yyds", mailDomains: "",
+};
 
 type SoundForm = {
   text: string;
@@ -316,6 +325,31 @@ function RegistrationWorkspace() {
     queryKey: ["elevenlabs", "registration-accounts"],
     queryFn: getElevenLabsRegistrationAccounts,
   });
+  const runtimeQuery = useQuery({
+    queryKey: ["elevenlabs", "runtime-config"],
+    queryFn: getElevenLabsRuntimeConfig,
+  });
+  const mailProviderMutation = useMutation({
+    mutationFn: (mailProvider: ElevenLabsMailProvider) => updateElevenLabsRuntimeConfig({
+      ...EMPTY_RUNTIME_FORM,
+      apiBaseURL: runtimeQuery.data?.apiBaseURL || EMPTY_RUNTIME_FORM.apiBaseURL,
+      requestTimeout: runtimeQuery.data?.requestTimeout || EMPTY_RUNTIME_FORM.requestTimeout,
+      generationTimeout: runtimeQuery.data?.generationTimeout || EMPTY_RUNTIME_FORM.generationTimeout,
+      registrationTimeout: runtimeQuery.data?.registrationTimeout || EMPTY_RUNTIME_FORM.registrationTimeout,
+      captchaProvider: runtimeQuery.data?.captchaProvider || EMPTY_RUNTIME_FORM.captchaProvider,
+      yesCaptchaEndpoint: runtimeQuery.data?.yesCaptchaEndpoint || EMPTY_RUNTIME_FORM.yesCaptchaEndpoint,
+      captchaGatewayEndpoint: runtimeQuery.data?.captchaGatewayEndpoint || EMPTY_RUNTIME_FORM.captchaGatewayEndpoint,
+      yydsAPIBase: runtimeQuery.data?.yydsAPIBase || EMPTY_RUNTIME_FORM.yydsAPIBase,
+      mailProvider,
+      mailDomains: runtimeQuery.data?.mailDomains || "",
+    }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["elevenlabs", "runtime-config"], data);
+      toast.success(t("elevenLabs.registration.mailProviderSaved", { provider: data.mailProvider === "outlook" ? "Outlook IMAP" : "YYDS Mail" }));
+      void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-status"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+  });
   const outlookImportMutation = useMutation({
     mutationFn: () => importElevenLabsOutlookAccounts(outlookText),
     onSuccess: (pool) => {
@@ -360,6 +394,7 @@ function RegistrationWorkspace() {
     },
   });
   const status = statusQuery.data;
+  const mailProvider = status?.mailProvider || runtimeQuery.data?.mailProvider || "yyds";
   const ready = status?.reachable === true && status.captchaConfigured && status.mailConfigured;
   const captchaProviderLabel = status?.captchaProvider === "captcha_gateway" ? "Captcha Gateway" : "YesCaptcha";
   const result = actionMutation.data;
@@ -422,7 +457,25 @@ function RegistrationWorkspace() {
       <section className="grid border-y sm:grid-cols-3 sm:[&>*+*]:border-l">
         <StatusMetric icon={<ServerCog />} label={t("elevenLabs.registration.service")} value={status?.reachable ? t("elevenLabs.online") : t("elevenLabs.offline")} healthy={status?.reachable === true} loading={statusQuery.isPending} />
         <StatusMetric icon={<KeyRound />} label={captchaProviderLabel} value={status?.captchaConfigured ? t("elevenLabs.configured") : t("elevenLabs.notConfigured")} healthy={status?.captchaConfigured === true} loading={statusQuery.isPending} />
-        <StatusMetric icon={<Network />} label={status?.mailProvider === "outlook" ? "Outlook IMAP" : "YYDS Mail"} value={status?.mailConfigured ? (status.mailProvider === "outlook" ? t("elevenLabs.registration.outlookAvailable", { count: status.outlookPool?.available ?? 0 }) : t("elevenLabs.configured")) : t("elevenLabs.notConfigured")} healthy={status?.mailConfigured === true} loading={statusQuery.isPending} />
+        <StatusMetric icon={<Network />} label={mailProvider === "outlook" ? "Outlook IMAP" : "YYDS Mail"} value={status?.mailConfigured ? (mailProvider === "outlook" ? t("elevenLabs.registration.outlookAvailable", { count: status.outlookPool?.available ?? 0 }) : t("elevenLabs.configured")) : t("elevenLabs.notConfigured")} healthy={status?.mailConfigured === true} loading={statusQuery.isPending} />
+      </section>
+
+      <section className="space-y-3 border-b pb-6">
+        <div>
+          <h3 className="text-sm font-medium">{t("elevenLabs.registration.mailSource")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{t("elevenLabs.registration.mailSourceDescription")}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Select value={mailProvider} onValueChange={(value: ElevenLabsMailProvider) => mailProviderMutation.mutate(value)} disabled={mailProviderMutation.isPending || actionMutation.isPending || !runtimeQuery.data}>
+            <SelectTrigger id="elevenlabs-mail-provider" className="w-56"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="yyds">YYDS Mail</SelectItem>
+              <SelectItem value="outlook">Outlook IMAP</SelectItem>
+            </SelectContent>
+          </Select>
+          {mailProviderMutation.isPending ? <Spinner className="size-4" /> : null}
+          <span className="text-xs text-muted-foreground">{t("elevenLabs.registration.mailSourceHint", { provider: mailProvider === "outlook" ? "Outlook IMAP" : "YYDS Mail" })}</span>
+        </div>
       </section>
 
       {!ready ? (
@@ -693,15 +746,6 @@ function RegistrationQuota({ account, locale, t }: { account: ElevenLabsRegistra
     </div>
   );
 }
-
-const EMPTY_RUNTIME_FORM: ElevenLabsRuntimeConfigInput = {
-  apiKey: "", clearAPIKey: false, apiBaseURL: "https://api.us.elevenlabs.io", proxyURL: "", dynamicProxyAPI: "", clearDynamicProxyAPI: false,
-  requestTimeout: 60, generationTimeout: 240, registrationTimeout: 600,
-  captchaProvider: "yescaptcha",
-  yesCaptchaAPIKey: "", clearYesCaptchaAPIKey: false, yesCaptchaEndpoint: "https://api.yescaptcha.com",
-  captchaGatewayAPIKey: "", clearCaptchaGatewayAPIKey: false, captchaGatewayEndpoint: "https://sub.aixiangshu.com",
-  yydsAPIKey: "", clearYYDSAPIKey: false, yydsAPIBase: "https://maliapi.215.im/v1", mailProvider: "yyds", mailDomains: "",
-};
 
 function RuntimeConfigWorkspace() {
   const configQuery = useQuery({ queryKey: ["elevenlabs", "runtime-config"], queryFn: getElevenLabsRuntimeConfig });
