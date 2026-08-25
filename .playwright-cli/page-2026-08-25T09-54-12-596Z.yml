@@ -1,0 +1,87 @@
+- generic [ref=e2]:
+  - generic [ref=e24]:
+    - complementary [ref=e322]:
+      - navigation "导航" [ref=e323]:
+        - link "ElevenLabs" [ref=e324] [cursor=pointer]:
+          - /url: /elevenlabs
+      - generic [ref=e328]:
+        - generic [ref=e329]: admin
+        - button "操作" [ref=e330]
+    - generic [ref=e25]:
+      - main [ref=e28]:
+        - generic [ref=e29]:
+          - generic [ref=e30]:
+            - heading "ElevenLabs Console" [level=1] [ref=e31]
+            - paragraph [ref=e32]: ElevenLabs 注册、运行配置与生成网关
+          - generic [ref=e33]:
+            - tablist [ref=e34]:
+              - tab "生成网关" [selected] [ref=e35]
+              - tab "注册机" [ref=e47]
+              - tab "运行配置" [ref=e51]
+            - tabpanel "生成网关" [ref=e55]:
+              - generic [ref=e331]:
+                - generic [ref=e332]:
+                  - generic [ref=e333]:
+                    - heading "生成网关" [level=2] [ref=e334]
+                    - paragraph [ref=e335]: 声音效果和图片生成共用当前 ElevenLabs 运行配置。
+                  - button "刷新" [ref=e336]
+                - generic [ref=e337]:
+                  - generic [ref=e345]:
+                    - generic [ref=e346]: Gateway
+                    - generic [ref=e347]: 在线
+                  - generic [ref=e356]:
+                    - generic [ref=e357]: API 凭据
+                    - generic [ref=e358]: 已配置
+                  - generic [ref=e368]:
+                    - generic [ref=e369]: 连接方式
+                    - generic [ref=e370]: 直连
+                  - generic [ref=e379]:
+                    - generic [ref=e380]: 可用模型
+                    - generic [ref=e381]: "3"
+                - generic [ref=e385]:
+                  - generic [ref=e386]: 可用模型
+                  - generic [ref=e387]: gpt-image-2
+                  - generic [ref=e388]: eleven_text_to_sound_v2
+                  - generic [ref=e389]: eleven_text_to_sound_v3
+                - generic [ref=e390]:
+                  - tablist [ref=e391]:
+                    - tab "声音效果" [ref=e392]
+                    - tab "图片生成" [active] [selected] [ref=e394]
+                  - tabpanel "图片生成" [ref=e429]:
+                    - generic [ref=e430]:
+                      - generic [ref=e431]:
+                        - generic [ref=e432]:
+                          - text: 生成方式
+                          - generic [ref=e433]:
+                            - button "文生图" [pressed] [ref=e434]
+                            - button "图生图" [ref=e435]
+                        - generic [ref=e436]:
+                          - text: 提示词
+                          - textbox "提示词" [ref=e437]:
+                            - /placeholder: 例如：白色背景上的极简产品摄影
+                        - generic [ref=e438]:
+                          - text: 画面比例
+                          - combobox "画面比例" [ref=e439]:
+                            - generic: 1:1
+                          - combobox [ref=e442]
+                        - generic [ref=e443]:
+                          - text: 分辨率
+                          - generic [ref=e444]:
+                            - button "1K" [pressed] [ref=e445]
+                            - button "2K" [ref=e446]
+                            - button "4K" [ref=e447]
+                        - generic [ref=e448]:
+                          - text: 质量
+                          - generic [ref=e449]:
+                            - button "低" [ref=e450]
+                            - button "中" [pressed] [ref=e451]
+                            - button "高" [ref=e452]
+                        - generic [ref=e453]:
+                          - button "生成图片" [disabled]
+                      - generic [ref=e454]:
+                        - generic [ref=e455]: 图片输出
+                        - generic [ref=e460]: 暂无图片结果
+      - contentinfo [ref=e154]:
+        - generic [ref=e155]: ElevenLabs Console
+        - generic [ref=e156]: © 2026
+  - region "Notifications alt+T"

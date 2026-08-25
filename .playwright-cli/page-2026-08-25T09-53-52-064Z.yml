@@ -1,0 +1,83 @@
+- generic [ref=e2]:
+  - generic [ref=e24]:
+    - complementary [ref=e322]:
+      - navigation "导航" [ref=e323]:
+        - link "ElevenLabs" [ref=e324] [cursor=pointer]:
+          - /url: /elevenlabs
+      - generic [ref=e328]:
+        - generic [ref=e329]: admin
+        - button "操作" [ref=e330]
+    - generic [ref=e25]:
+      - main [ref=e28]:
+        - generic [ref=e29]:
+          - generic [ref=e30]:
+            - heading "ElevenLabs Console" [level=1] [ref=e31]
+            - paragraph [ref=e32]: ElevenLabs 注册、运行配置与生成网关
+          - generic [ref=e33]:
+            - tablist [ref=e34]:
+              - tab "生成网关" [active] [selected] [ref=e35]
+              - tab "注册机" [ref=e47]
+              - tab "运行配置" [ref=e51]
+            - tabpanel "生成网关" [ref=e55]:
+              - generic [ref=e331]:
+                - generic [ref=e332]:
+                  - generic [ref=e333]:
+                    - heading "生成网关" [level=2] [ref=e334]
+                    - paragraph [ref=e335]: 声音效果和图片生成共用当前 ElevenLabs 运行配置。
+                  - button "刷新" [ref=e336]
+                - generic [ref=e337]:
+                  - generic [ref=e345]:
+                    - generic [ref=e346]: Gateway
+                    - generic [ref=e347]: 在线
+                  - generic [ref=e356]:
+                    - generic [ref=e357]: API 凭据
+                    - generic [ref=e358]: 已配置
+                  - generic [ref=e368]:
+                    - generic [ref=e369]: 连接方式
+                    - generic [ref=e370]: 直连
+                  - generic [ref=e379]:
+                    - generic [ref=e380]: 可用模型
+                    - generic [ref=e381]: "3"
+                - generic [ref=e385]:
+                  - generic [ref=e386]: 可用模型
+                  - generic [ref=e387]: gpt-image-2
+                  - generic [ref=e388]: eleven_text_to_sound_v2
+                  - generic [ref=e389]: eleven_text_to_sound_v3
+                - generic [ref=e390]:
+                  - tablist [ref=e391]:
+                    - tab "声音效果" [selected] [ref=e392]
+                    - tab "图片生成" [ref=e394]
+                  - tabpanel "声音效果" [ref=e399]:
+                    - generic [ref=e400]:
+                      - generic [ref=e401]:
+                        - generic [ref=e402]:
+                          - text: 提示词
+                          - textbox "提示词" [ref=e403]:
+                            - /placeholder: 例如：短促、干净的电影转场冲击声
+                        - generic [ref=e404]:
+                          - text: 模型
+                          - combobox "模型" [ref=e405]:
+                            - generic: eleven_text_to_sound_v2
+                          - combobox [ref=e408]
+                        - generic [ref=e409]:
+                          - generic [ref=e410]:
+                            - generic [ref=e411]: 时长
+                            - generic [ref=e412]: 4s
+                          - slider "时长" [ref=e413] [cursor=pointer]: "4"
+                        - generic [ref=e414]:
+                          - generic [ref=e415]:
+                            - generic [ref=e416]: 提示词影响
+                            - generic [ref=e417]: "0.3"
+                          - slider "提示词影响" [ref=e418] [cursor=pointer]: "0.3"
+                        - generic [ref=e419]:
+                          - generic [ref=e420]: 循环音频
+                          - switch "循环音频" [ref=e421] [cursor=pointer]
+                          - checkbox
+                        - button "生成声音" [disabled]
+                      - generic [ref=e422]:
+                        - generic [ref=e423]: 声音输出
+                        - generic [ref=e425]: 暂无声音结果
+      - contentinfo [ref=e154]:
+        - generic [ref=e155]: ElevenLabs Console
+        - generic [ref=e156]: © 2026
+  - region "Notifications alt+T"
