@@ -36,13 +36,7 @@ docker compose up -d --build elevenlabs-register
 
 代理留空时使用直连，不会读取系统代理或其他容器端口。填写固定代理时支持 HTTP、HTTPS、SOCKS4、SOCKS4A、SOCKS5 和 SOCKS5H，日志只显示脱敏后的 scheme、host 和 port。
 
-推荐在运行配置中填写 1024Proxy 白名单动态 IP API，例如：
-
-```text
-https://white.1024proxy.com/white/api?region=Rand&num=1&time=10&format=1&type=txt
-```
-
-注册机会在每个账号开始前按需提取 Sticky IP。会话时长应覆盖完整注册（建议不少于 10 分钟）。同一出口 24 小时内不会再开第二个免费账号；配置动态 IP 后最多 3 路并发，每路独占一个出口。直连或只有一个固定出口时自动降到 1 路，避免同一 IP 触发 ElevenLabs 的免费账号风控。
+推荐在运行配置中填写动态 Sticky IP API。该链接按密钥处理：读取接口只返回是否已配置，不会回显完整 URL。注册机会在每个账号开始前按需提取 Sticky IP。会话时长应覆盖完整注册（建议不少于 10 分钟）。同一出口 24 小时内不会再开第二个免费账号；配置动态 IP 后最多 3 路并发，每路独占一个出口。直连或只有一个固定出口时自动降到 1 路，避免同一 IP 触发 ElevenLabs 的免费账号风控。
 
 共享配置文件以 `0600` 权限原子写入 Docker 卷。读取接口仅返回密钥是否已配置，不返回密钥原文。
 

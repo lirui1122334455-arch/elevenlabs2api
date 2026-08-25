@@ -775,7 +775,7 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
     mutationFn: () => updateElevenLabsRuntimeConfig(form),
     onSuccess: (data) => {
       queryClient.setQueryData(["elevenlabs", "runtime-config"], data);
-      setForm((current) => ({ ...current, apiKey: "", yesCaptchaAPIKey: "", captchaGatewayAPIKey: "", yydsAPIKey: "" }));
+      setForm((current) => ({ ...current, apiKey: "", yesCaptchaAPIKey: "", captchaGatewayAPIKey: "", yydsAPIKey: "", dynamicProxyAPI: "", clearDynamicProxyAPI: false }));
       toast.success(t("elevenLabs.runtime.saved"));
       void queryClient.invalidateQueries({ queryKey: ["elevenlabs"] });
     },
@@ -818,7 +818,13 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
               <Input id="elevenlabs-runtime-proxy" value={form.proxyURL} onChange={(event) => setForm((current) => ({ ...current, proxyURL: event.target.value }))} placeholder={config?.proxyConfigured && !config.dynamicProxyConfigured ? config.proxyLabel : t("elevenLabs.runtime.directPlaceholder")} />
             </Field>
             <Field label={t("elevenLabs.runtime.dynamicProxyAPI")} htmlFor="elevenlabs-runtime-dynamic-proxy">
-              <Input id="elevenlabs-runtime-dynamic-proxy" value={form.dynamicProxyAPI} onChange={(event) => setForm((current) => ({ ...current, dynamicProxyAPI: event.target.value }))} placeholder={config?.dynamicProxyConfigured ? t("elevenLabs.runtime.keepSecret") : "https://white.1024proxy.com/white/api?region=Rand&num=1&time=10&format=1&type=txt"} />
+              <Input id="elevenlabs-runtime-dynamic-proxy" type="password" autoComplete="off" value={form.dynamicProxyAPI} onChange={(event) => setForm((current) => ({ ...current, dynamicProxyAPI: event.target.value, clearDynamicProxyAPI: false }))} placeholder={config?.dynamicProxyConfigured ? t("elevenLabs.runtime.keepSecret") : t("elevenLabs.runtime.dynamicProxyPlaceholder")} />
+              {config?.dynamicProxyConfigured ? (
+                <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={form.clearDynamicProxyAPI} onChange={(event) => setForm((current) => ({ ...current, clearDynamicProxyAPI: event.target.checked, dynamicProxyAPI: event.target.checked ? "" : current.dynamicProxyAPI }))} />
+                  {t("elevenLabs.runtime.clearDynamicProxy")}
+                </label>
+              ) : null}
             </Field>
             <Field label={t("elevenLabs.runtime.requestTimeout")} htmlFor="elevenlabs-runtime-request-timeout">
               <Input id="elevenlabs-runtime-request-timeout" type="number" min={5} max={300} value={form.requestTimeout} onChange={(event) => setForm((current) => ({ ...current, requestTimeout: Number(event.target.value) }))} />
