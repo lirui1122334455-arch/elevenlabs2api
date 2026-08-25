@@ -54,6 +54,9 @@ services/auto_register/engine/sso_output/
 services/auto_register/.venv*/
 services/auto_register/data/elevenlabs-profile/
 services/auto_register/data/elevenlabs-credentials.json
+services/auto_register/data/outlook-accounts.db
+services/auto_register/data/outlook-accounts.db-*
+services/auto_register/_tmp_*.py
 services/auto_register/elevenlabs.local.json
 services/auto_register/__pycache__/
 services/auto_register/**/__pycache__/

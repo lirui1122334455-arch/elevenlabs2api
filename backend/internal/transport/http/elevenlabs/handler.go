@@ -25,6 +25,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/elevenlabs/runtime-config/preflight", h.runtimePreflight)
 	router.GET("/elevenlabs/registration/status", h.registrationStatus)
 	router.GET("/elevenlabs/registration/accounts", h.registrationAccounts)
+	router.POST("/elevenlabs/registration/outlook/import", h.importOutlookAccounts)
 	router.POST("/elevenlabs/registration/accounts/:id/refresh", h.refreshRegistrationAccount)
 	router.POST("/elevenlabs/registration/preflight", h.registrationPreflight)
 	router.POST("/elevenlabs/registration/dry-run", h.registrationDryRun)
@@ -67,6 +68,22 @@ func (h *Handler) runtimePreflight(c *gin.Context) {
 
 func (h *Handler) registrationStatus(c *gin.Context) {
 	response.Success(c, http.StatusOK, h.service.RegistrationStatus(c.Request.Context()))
+}
+
+func (h *Handler) importOutlookAccounts(c *gin.Context) {
+	var input struct {
+		Text string `json:"text"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+		return
+	}
+	result, err := h.service.ImportOutlookAccounts(c.Request.Context(), input.Text)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result)
 }
 
 func (h *Handler) registrationAccounts(c *gin.Context) {

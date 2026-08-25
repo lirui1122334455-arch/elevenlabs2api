@@ -274,6 +274,12 @@ class ElevenLabsConfig:
                 domains = self.mail.get("mailDomains") or self.mail.get("mail_domains")
                 if _placeholder(domains):
                     raise ValueError("replace the local owned mail domain before running")
+            elif provider.lower() in {"outlook", "outlook_imap", "hotmail"}:
+                from .outlook_mail import outlook_pool_stats, outlook_store_path
+
+                stats = outlook_pool_stats(outlook_store_path(self.mail))
+                if stats["available"] < 1:
+                    raise ValueError("import Outlook mailboxes before running automated signup")
             else:
                 api_base = self.mail.get("cloudflare_api_base") or self.mail.get("mail_api_base")
                 if not api_base or _placeholder(api_base):

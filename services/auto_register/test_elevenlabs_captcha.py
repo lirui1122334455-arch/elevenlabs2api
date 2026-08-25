@@ -18,6 +18,7 @@ from elevenlabs_assisted.browser_flow import (
     HCAPTCHA_INIT_SCRIPT,
     _email_verified,
     _install_presignup_token_route,
+    _raise_if_account_restricted,
     _raise_if_signup_failed,
     _request_json_payload,
     _sitekey_from_url,
@@ -401,6 +402,11 @@ class SignupStateTest(unittest.TestCase):
         self.assertEqual(submit.call_count, 2)
         self.assertEqual(page.gotos, [browser_flow.SIGNIN_URL, browser_flow.SIGNIN_URL])
         self.assertTrue(any("reloading before retry" in line for line in logs))
+
+    def test_detects_restricted_account_copy(self) -> None:
+        page = _FakePage("https://elevenlabs.io/app/home", "We detected unusual activity on this account")
+        with self.assertRaisesRegex(RuntimeError, "detected_unusual_activity"):
+            _raise_if_account_restricted(page)
 
 
 if __name__ == "__main__":

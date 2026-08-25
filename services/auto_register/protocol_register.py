@@ -854,6 +854,10 @@ def create_mailbox(config: dict, emit: Callable[[str], None] | None = None) -> t
     ).strip().lower()
     if provider in {"yyds", "yyds_mail", "215", "215.im"}:
         return create_yyds_mailbox(config, emit=emit)
+    if provider in {"outlook", "outlook_imap", "hotmail"}:
+        from elevenlabs_assisted.outlook_mail import create_outlook_mailbox
+
+        return create_outlook_mailbox(config, emit=emit)
     return create_cloudflare_mailbox(config, emit=emit)
 
 

@@ -39,6 +39,11 @@ from elevenlabs_assisted.credentials import (
     update_credentials,
 )
 from elevenlabs_assisted.dynamic_proxy import fetch_dynamic_proxies
+from elevenlabs_assisted.outlook_mail import (
+    import_outlook_accounts,
+    outlook_pool_stats,
+    outlook_store_path,
+)
 from elevenlabs_assisted.passwords import generate_password
 from elevenlabs_assisted.proxy_preflight import preflight_proxy, safe_proxy_label
 from protocol_register import create_mailbox
@@ -47,6 +52,15 @@ from runtime_config import RuntimeConfig, RuntimeConfigStore
 
 MAX_BODY_BYTES = 64 << 10
 STREAM_HEARTBEAT_SECONDS = 15
+
+
+def outlook_accounts_path() -> Path:
+    return Path(
+        os.environ.get(
+            "ELEVENLABS_OUTLOOK_STORE",
+            "/app/data/outlook-accounts.db",
+        )
+    )
 
 
 def credentials_file_path() -> Path:
@@ -141,10 +155,11 @@ def registration_payload(runtime: RuntimeConfig) -> dict[str, Any]:
             "timeout_sec": min(max(timeout, 60), 600),
         },
         "mail": {
-            "provider": "yyds",
+            "provider": runtime.mail_provider or "yyds",
             "yyds_api_base": runtime.yyds_api_base,
             "yyds_api_key": runtime.yyds_api_key,
             "mailDomains": runtime.mail_domains,
+            "outlook_store": str(outlook_accounts_path()),
             "email_proxy": "same_as_browser",
             "timeout_sec": min(max(timeout, 60), 1800),
             "mail_poll_interval": 2,
@@ -341,7 +356,8 @@ def run_one_registration(
     config: ElevenLabsConfig,
     emit: Callable[[str], None],
 ) -> dict[str, Any]:
-    emit("[phase:create_mailbox] creating one YYDS mailbox")
+    provider = str(config.mail.get("email_provider") or config.mail.get("provider") or "yyds")
+    emit(f"[phase:create_mailbox] claiming one {provider} mailbox")
     email, receiver = create_mailbox(config.mail, emit=emit)
     password = config.password or generate_password()
     if config.save_credentials:
@@ -363,7 +379,9 @@ def run_one_registration(
             receiver=receiver,
             emit=emit,
         )
-    except Exception:
+    except Exception as exc:
+        if hasattr(receiver, "mark_failed"):
+            receiver.mark_failed(str(exc)[:400])
         if config.save_credentials:
             update_credentials(
                 config.credentials_file,
@@ -378,6 +396,8 @@ def run_one_registration(
             "status": "active",
             "exit_label": safe_proxy_label(config.proxy_url),
         }
+        if hasattr(receiver, "mark_done"):
+            receiver.mark_done()
         if browser_result.api_key:
             extra["api_key"] = browser_result.api_key
         if browser_result.subscription:
@@ -530,6 +550,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             json_response(self, 200, {"ok": True, "accounts": list_registration_accounts()})
             return
+        if path == "/v1/outlook/accounts":
+            if not self._require_auth():
+                return
+            json_response(self, 200, {"ok": True, **outlook_pool_stats(outlook_accounts_path())})
+            return
         if path not in {"/", "/health", "/healthz"}:
             json_response(self, 404, {"error": {"message": "not found"}})
             return
@@ -546,7 +571,13 @@ class Handler(BaseHTTPRequestHandler):
                 "dynamic_proxy": bool(runtime.dynamic_proxy_api),
                 "captcha_provider": runtime.captcha_provider,
                 "captcha_configured": not captcha_error,
-                "mail_configured": bool(runtime.yyds_api_key and runtime.mail_domains),
+                "mail_configured": (
+                    outlook_pool_stats(outlook_accounts_path())["available"] > 0
+                    if runtime.mail_provider == "outlook"
+                    else bool(runtime.yyds_api_key and runtime.mail_domains)
+                ),
+                "mail_provider": runtime.mail_provider,
+                "outlook_pool": outlook_pool_stats(outlook_accounts_path()),
                 "runtime_revision": runtime.revision,
                 "error": captcha_error,
             },
@@ -561,6 +592,14 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, 400, {"error": {"message": str(exc)}})
             return
         path = urlparse(self.path).path
+        if path == "/v1/outlook/import":
+            text = str((payload or {}).get("text") or "")
+            try:
+                result = import_outlook_accounts(outlook_accounts_path(), text)
+                json_response(self, 200, {"ok": True, **result, **outlook_pool_stats(outlook_accounts_path())})
+            except Exception as exc:
+                json_response(self, 400, {"error": {"code": "outlook_import_failed", "message": str(exc)[:400]}})
+            return
         account_match = re.fullmatch(r"/v1/accounts/([0-9a-f]{20})/refresh", path)
         if account_match:
             try:

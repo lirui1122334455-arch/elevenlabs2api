@@ -45,6 +45,7 @@ services:
       ELEVENLABS_REGISTER_PORT: "8093"
       ELEVENLABS_REGISTER_KEY: "${ELEVENLABS_REGISTER_KEY:-}"
       ELEVENLABS_RUNTIME_CONFIG_PATH: "/app/data/runtime-config.json"
+      ELEVENLABS_OUTLOOK_STORE: "/app/data/outlook-accounts.db"
     volumes:
       - elevenlabs-media:/app/data
     restart: unless-stopped
@@ -81,6 +82,7 @@ services:
       ELEVENLABS_MEDIA_DIR: "/app/data"
       ELEVENLABS_RUNTIME_CONFIG_PATH: "/app/data/runtime-config.json"
       ELEVENLABS_CREDENTIALS_PATH: "/app/data/elevenlabs-credentials.json"
+      ELEVENLABS_OUTLOOK_STORE: "/app/data/outlook-accounts.db"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

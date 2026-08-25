@@ -67,6 +67,7 @@ type RuntimeConfig struct {
 	CaptchaGatewayEndpoint      string  `json:"captchaGatewayEndpoint"`
 	YYDSKeyConfigured           bool    `json:"yydsKeyConfigured"`
 	YYDSAPIBase                 string  `json:"yydsAPIBase"`
+	MailProvider                string  `json:"mailProvider"`
 	MailDomains                 string  `json:"mailDomains"`
 	Revision                    int64   `json:"revision"`
 }
@@ -91,18 +92,32 @@ type RuntimeConfigUpdate struct {
 	YYDSAPIKey                string  `json:"yydsAPIKey"`
 	ClearYYDSAPIKey           bool    `json:"clearYYDSAPIKey"`
 	YYDSAPIBase               string  `json:"yydsAPIBase"`
+	MailProvider              string  `json:"mailProvider"`
 	MailDomains               string  `json:"mailDomains"`
 }
 
+type OutlookPoolStats struct {
+	Available int `json:"available"`
+	InUse     int `json:"inUse"`
+	Done      int `json:"done"`
+	Failed    int `json:"failed"`
+	Total     int `json:"total"`
+	Imported  int `json:"imported,omitempty"`
+	Updated   int `json:"updated,omitempty"`
+	Skipped   int `json:"skipped,omitempty"`
+}
+
 type RegistrationStatus struct {
-	Reachable         bool   `json:"reachable"`
-	Running           bool   `json:"running"`
-	Connection        string `json:"connection"`
-	CaptchaProvider   string `json:"captchaProvider"`
-	CaptchaConfigured bool   `json:"captchaConfigured"`
-	MailConfigured    bool   `json:"mailConfigured"`
-	RuntimeRevision   int64  `json:"runtimeRevision"`
-	Error             string `json:"error,omitempty"`
+	Reachable         bool             `json:"reachable"`
+	Running           bool             `json:"running"`
+	Connection        string           `json:"connection"`
+	CaptchaProvider   string           `json:"captchaProvider"`
+	CaptchaConfigured bool             `json:"captchaConfigured"`
+	MailConfigured    bool             `json:"mailConfigured"`
+	MailProvider      string           `json:"mailProvider"`
+	OutlookPool       OutlookPoolStats `json:"outlookPool"`
+	RuntimeRevision   int64            `json:"runtimeRevision"`
+	Error             string           `json:"error,omitempty"`
 }
 
 type RegistrationCreatedAccount struct {
@@ -341,7 +356,7 @@ func (s *Service) UpdateRuntimeConfig(ctx context.Context, input RuntimeConfigUp
 		"clear_captcha_gateway_api_key": input.ClearCaptchaGatewayAPIKey,
 		"captcha_gateway_endpoint":      input.CaptchaGatewayEndpoint,
 		"yyds_api_key":                  input.YYDSAPIKey, "clear_yyds_api_key": input.ClearYYDSAPIKey,
-		"yyds_api_base": input.YYDSAPIBase, "mail_domains": input.MailDomains,
+		"yyds_api_base": input.YYDSAPIBase, "mail_provider": input.MailProvider, "mail_domains": input.MailDomains,
 	}
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
@@ -382,6 +397,14 @@ func (s *Service) RegistrationStatus(ctx context.Context) RegistrationStatus {
 		CaptchaProvider   string `json:"captcha_provider"`
 		CaptchaConfigured bool   `json:"captcha_configured"`
 		MailConfigured    bool   `json:"mail_configured"`
+		MailProvider      string `json:"mail_provider"`
+		OutlookPool       struct {
+			Available int `json:"available"`
+			InUse     int `json:"in_use"`
+			Done      int `json:"done"`
+			Failed    int `json:"failed"`
+			Total     int `json:"total"`
+		} `json:"outlook_pool"`
 		RuntimeRevision   int64  `json:"runtime_revision"`
 		Error             string `json:"error"`
 	}
@@ -395,9 +418,43 @@ func (s *Service) RegistrationStatus(ctx context.Context) RegistrationStatus {
 	result.CaptchaProvider = payload.CaptchaProvider
 	result.CaptchaConfigured = payload.CaptchaConfigured
 	result.MailConfigured = payload.MailConfigured
+	result.MailProvider = payload.MailProvider
+	result.OutlookPool = OutlookPoolStats{
+		Available: payload.OutlookPool.Available, InUse: payload.OutlookPool.InUse,
+		Done: payload.OutlookPool.Done, Failed: payload.OutlookPool.Failed, Total: payload.OutlookPool.Total,
+	}
 	result.RuntimeRevision = payload.RuntimeRevision
 	result.Error = payload.Error
 	return result
+}
+
+func (s *Service) ImportOutlookAccounts(ctx context.Context, text string) (OutlookPoolStats, error) {
+	requestBody, err := json.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return OutlookPoolStats{}, &GatewayError{Status: http.StatusBadRequest, Code: "invalidRequest", Message: "outlook import payload is invalid"}
+	}
+	body, _, err := s.doRegister(ctx, http.MethodPost, "/v1/outlook/import", requestBody, maxJSONBytes)
+	if err != nil {
+		return OutlookPoolStats{}, err
+	}
+	var payload struct {
+		OK        bool `json:"ok"`
+		Available int  `json:"available"`
+		InUse     int  `json:"in_use"`
+		Done      int  `json:"done"`
+		Failed    int  `json:"failed"`
+		Total     int  `json:"total"`
+		Imported  int  `json:"imported"`
+		Updated   int  `json:"updated"`
+		Skipped   int  `json:"skipped"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || !payload.OK {
+		return OutlookPoolStats{}, invalidResponseError()
+	}
+	return OutlookPoolStats{
+		Available: payload.Available, InUse: payload.InUse, Done: payload.Done, Failed: payload.Failed,
+		Total: payload.Total, Imported: payload.Imported, Updated: payload.Updated, Skipped: payload.Skipped,
+	}, nil
 }
 
 func (s *Service) RegistrationAction(ctx context.Context, action string, count int) (RegistrationResult, error) {
@@ -701,6 +758,7 @@ func decodeRuntimeConfig(body []byte) (RuntimeConfig, error) {
 		CaptchaGatewayEndpoint      string  `json:"captcha_gateway_endpoint"`
 		YYDSKeyConfigured           bool    `json:"yyds_key_configured"`
 		YYDSAPIBase                 string  `json:"yyds_api_base"`
+		MailProvider                string  `json:"mail_provider"`
 		MailDomains                 string  `json:"mail_domains"`
 		Revision                    int64   `json:"revision"`
 	}
@@ -717,7 +775,7 @@ func decodeRuntimeConfig(body []byte) (RuntimeConfig, error) {
 		YesCaptchaKeyConfigured: payload.YesCaptchaKeyConfigured, YesCaptchaEndpoint: payload.YesCaptchaEndpoint,
 		CaptchaGatewayKeyConfigured: payload.CaptchaGatewayKeyConfigured, CaptchaGatewayEndpoint: payload.CaptchaGatewayEndpoint,
 		YYDSKeyConfigured: payload.YYDSKeyConfigured, YYDSAPIBase: payload.YYDSAPIBase,
-		MailDomains: payload.MailDomains, Revision: payload.Revision,
+		MailProvider: payload.MailProvider, MailDomains: payload.MailDomains, Revision: payload.Revision,
 	}, nil
 }
 

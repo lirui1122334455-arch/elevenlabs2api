@@ -396,6 +396,8 @@ def connect_existing_account(
         page.on("response", lambda response: _capture_account_response(response, account_state))
         _emit(emit, "load_signin", "opening ElevenLabs sign-in for gateway connection")
         _automated_signin(page, config, email=email, password=password, emit=emit)
+        _complete_onboarding(page, emit)
+        _raise_if_account_restricted(page)
         _wait_for_account_snapshot(page, account_state, emit)
         api_key = _provision_gateway_api_key(page, account_state, emit)
         return BrowserResult(
@@ -483,6 +485,65 @@ def _authenticated(page: Any) -> bool:
         pass
     path = urlsplit(page.url).path.rstrip("/")
     return path == "/app/home" or path.startswith("/app/onboarding")
+
+
+def _raise_if_account_restricted(page: Any) -> None:
+    body = _page_text(page)
+    checks = (
+        ("unusual activity", "detected_unusual_activity"),
+        ("too many free accounts", "free_account_limit"),
+        ("one free account", "free_account_limit"),
+        ("phone verification", "phone_verification_required"),
+        ("verify your phone", "phone_verification_required"),
+        ("account has been disabled", "account_disabled"),
+        ("account suspended", "account_disabled"),
+        ("restricted country", "geo_restricted"),
+    )
+    for needle, code in checks:
+        if needle in body:
+            raise RuntimeError(f"{code}: ElevenLabs blocked this account ({needle})")
+
+
+def _complete_onboarding(page: Any, emit: Callable[[str], None], timeout: float = 45) -> None:
+    path = urlsplit(page.url).path.lower()
+    if not path.startswith("/app/onboarding"):
+        return
+    _emit(emit, "onboarding", "completing ElevenLabs first-run onboarding")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _raise_if_account_restricted(page)
+        path = urlsplit(page.url).path.rstrip("/")
+        if path == "/app/home" or path.startswith("/app/home"):
+            _emit(emit, "onboarding", "onboarding finished")
+            return
+        clicked = False
+        for selector in (
+            'button:has-text("Continue")',
+            'button:has-text("Next")',
+            'button:has-text("Get started")',
+            'button:has-text("Skip")',
+            'button[type="submit"]',
+            '[data-testid*="continue"] button',
+            '[data-testid*="next"] button',
+        ):
+            locator = page.locator(selector)
+            if locator.count() == 0:
+                continue
+            try:
+                button = locator.first
+                if button.is_visible() and button.is_enabled():
+                    button.click()
+                    clicked = True
+                    page.wait_for_timeout(800)
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            page.wait_for_timeout(1000)
+    _raise_if_account_restricted(page)
+    path = urlsplit(page.url).path
+    if path.startswith("/app/onboarding"):
+        _emit(emit, "onboarding", f"left onboarding unfinished path={path}")
 
 
 def _capture_signin_response(response: Any, state: dict[str, Any]) -> None:
@@ -1216,6 +1277,8 @@ def _run_registration(
             prompt("In Chrome, click Sign in. Press Enter here after the page starts signing in: ")
             if not _wait_for_authenticated(page, min(config.confirmation_timeout, 120)):
                 raise RuntimeError("timed out waiting for an authenticated ElevenLabs page")
+        _complete_onboarding(page, emit)
+        _raise_if_account_restricted(page)
         _wait_for_account_snapshot(page, account_state, emit)
         _provision_gateway_api_key(page, account_state, emit)
         _emit(emit, "done", "ElevenLabs authenticated page confirmed")

@@ -66,7 +66,7 @@ Captcha Gateway 默认地址为 `https://sub.aixiangshu.com`，注册机会按�
 ## 注册流程
 
 1. 验证直连或指定代理能访问 ElevenLabs。
-2. 使用 YYDS 创建一个自有域名邮箱并生成随机密码。
+2. 从 YYDS 创建自有域名邮箱，或从已导入的 Outlook IMAP 号池领取一个 `email----password----client_id----refresh_token` 账号。
 3. 启动一次性 Chromium profile，加载注册页。
 4. 填写邮箱、密码并勾选条款，调用所选供应商解 hCaptcha。
 5. 将 token 预置到页面桥接层，由 ElevenLabs 表单自己的 `execute({ async: true })` 读取后提交；日志同时显示 Stripe 风控等待和 `/v1/user/pre-sign-up` HTTP 状态。
@@ -74,9 +74,11 @@ Captcha Gateway 默认地址为 `https://sub.aixiangshu.com`，注册机会按�
 7. 轮询邮箱并提取受 host allowlist 限制的 HTTPS 验证链接。
 8. 在同一浏览器上下文打开验证链接。
 9. 使用同一邮箱密码登录，确认进入 `/app/home` 或 onboarding。
-10. 捕获 `/v1/user` 或 `/v1/user/subscription` 响应中的套餐、已用额度、额度上限和重置时间。
-11. 按邮箱更新保存账号；管理页列表显示邮箱、密码、套餐、状态和额度。
-12. 批量注册时按顺序重复以上流程，账号之间暂停数秒；某个账号失败后继续下一个，并在实时日志中标记进度。
+10. 若进入 onboarding，自动点击 Continue/Skip 直到进入工作区；若页面提示异常活动、免费账号限制或需要手机验证，任务失败而不是保存成可用号。
+11. 捕获 `/v1/user` 或 `/v1/user/subscription` 响应中的套餐、已用额度、额度上限和重置时间。
+12. 为生成网关创建受限 API Key；创建失败则该账号不算可用。
+13. 按邮箱更新保存账号；管理页列表显示邮箱、密码、套餐、状态和额度。
+14. 批量注册时按可用出口并发，每个账号使用独立 Sticky IP；某个账号失败后会继续下一个，并在实时日志中标记进度。
 
 每次运行结束后临时浏览器 profile 会删除。验证链接日志会删除查询字符串，密码、Cookie、Firebase Token 和邮箱 API Token 不进入日志。
 

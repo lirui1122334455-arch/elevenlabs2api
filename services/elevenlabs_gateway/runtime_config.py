@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 _PROXY_SCHEMES = {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}
 _DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _CAPTCHA_PROVIDERS = {"yescaptcha", "captcha_gateway"}
+_MAIL_PROVIDERS = {"yyds", "outlook"}
 
 
 def _https_url(value: Any, default: str, name: str, *, allow_query: bool = False) -> str:
@@ -97,6 +98,15 @@ def _seconds(value: Any, default: float, name: str, minimum: float, maximum: flo
     return result
 
 
+def _mail_provider(value: Any) -> str:
+    provider = str(value or "yyds").strip().lower().replace("-", "_")
+    if provider in {"outlook_imap", "hotmail"}:
+        provider = "outlook"
+    if provider not in _MAIL_PROVIDERS:
+        raise ValueError("mail_provider must be yyds or outlook")
+    return provider
+
+
 def _captcha_provider(value: Any) -> str:
     provider = str(value or "yescaptcha").strip().lower().replace("-", "_")
     if provider == "gateway":
@@ -133,6 +143,7 @@ class RuntimeConfig:
     captcha_gateway_endpoint: str = "https://sub.aixiangshu.com"
     yyds_api_key: str = ""
     yyds_api_base: str = "https://maliapi.215.im/v1"
+    mail_provider: str = "yyds"
     mail_domains: str = ""
     revision: int = 0
 
@@ -169,6 +180,7 @@ class RuntimeConfig:
             yyds_api_base=_https_url(
                 raw.get("yyds_api_base"), "https://maliapi.215.im/v1", "yyds_api_base"
             ),
+            mail_provider=_mail_provider(raw.get("mail_provider")),
             mail_domains=_domains(raw.get("mail_domains")),
             revision=max(0, int(raw.get("revision") or 0)),
         )
@@ -192,6 +204,7 @@ class RuntimeConfig:
                 "captcha_gateway_endpoint": os.environ.get("CAPTCHA_GATEWAY_ENDPOINT", ""),
                 "yyds_api_key": os.environ.get("YYDS_API_KEY", ""),
                 "yyds_api_base": os.environ.get("YYDS_API_BASE", ""),
+                "mail_provider": os.environ.get("ELEVENLABS_MAIL_PROVIDER", ""),
                 "mail_domains": os.environ.get("ELEVENLABS_MAIL_DOMAINS", ""),
             }
         )
@@ -246,6 +259,7 @@ class RuntimeConfig:
             "captcha_gateway_endpoint": self.captcha_gateway_endpoint,
             "yyds_key_configured": bool(self.yyds_api_key),
             "yyds_api_base": self.yyds_api_base,
+            "mail_provider": self.mail_provider,
             "mail_domains": self.mail_domains,
             "revision": self.revision,
         }
@@ -300,6 +314,7 @@ class RuntimeConfigStore:
                 "yescaptcha_endpoint",
                 "captcha_gateway_endpoint",
                 "yyds_api_base",
+                "mail_provider",
                 "mail_domains",
             ):
                 if field in payload:

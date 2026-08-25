@@ -22,6 +22,7 @@ import {
   generateElevenLabsSound,
   getElevenLabsRegistrationAccounts,
   getElevenLabsRegistrationStatus,
+  importElevenLabsOutlookAccounts,
   getElevenLabsModels,
   getElevenLabsRuntimeConfig,
   getElevenLabsStatus,
@@ -302,6 +303,7 @@ function RegistrationWorkspace() {
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [count, setCount] = useState(1);
+  const [outlookText, setOutlookText] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [revealedPasswords, setRevealedPasswords] = useState<Set<string>>(() => new Set());
   const logViewportRef = useRef<HTMLDivElement>(null);
@@ -313,6 +315,15 @@ function RegistrationWorkspace() {
   const accountsQuery = useQuery({
     queryKey: ["elevenlabs", "registration-accounts"],
     queryFn: getElevenLabsRegistrationAccounts,
+  });
+  const outlookImportMutation = useMutation({
+    mutationFn: () => importElevenLabsOutlookAccounts(outlookText),
+    onSuccess: (pool) => {
+      setOutlookText("");
+      toast.success(t("elevenLabs.registration.outlookImported", { count: pool.imported ?? 0, available: pool.available }));
+      void queryClient.invalidateQueries({ queryKey: ["elevenlabs", "registration-status"] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
   });
   const quotaMutation = useMutation({
     mutationFn: refreshElevenLabsRegistrationAccount,
@@ -411,7 +422,7 @@ function RegistrationWorkspace() {
       <section className="grid border-y sm:grid-cols-3 sm:[&>*+*]:border-l">
         <StatusMetric icon={<ServerCog />} label={t("elevenLabs.registration.service")} value={status?.reachable ? t("elevenLabs.online") : t("elevenLabs.offline")} healthy={status?.reachable === true} loading={statusQuery.isPending} />
         <StatusMetric icon={<KeyRound />} label={captchaProviderLabel} value={status?.captchaConfigured ? t("elevenLabs.configured") : t("elevenLabs.notConfigured")} healthy={status?.captchaConfigured === true} loading={statusQuery.isPending} />
-        <StatusMetric icon={<Network />} label="YYDS Mail" value={status?.mailConfigured ? t("elevenLabs.configured") : t("elevenLabs.notConfigured")} healthy={status?.mailConfigured === true} loading={statusQuery.isPending} />
+        <StatusMetric icon={<Network />} label={status?.mailProvider === "outlook" ? "Outlook IMAP" : "YYDS Mail"} value={status?.mailConfigured ? (status.mailProvider === "outlook" ? t("elevenLabs.registration.outlookAvailable", { count: status.outlookPool?.available ?? 0 }) : t("elevenLabs.configured")) : t("elevenLabs.notConfigured")} healthy={status?.mailConfigured === true} loading={statusQuery.isPending} />
       </section>
 
       {!ready ? (
@@ -420,6 +431,20 @@ function RegistrationWorkspace() {
           <span>{status?.error || t("elevenLabs.registration.notReady")}</span>
         </div>
       ) : null}
+
+      <section className="space-y-3 border-b pb-6">
+        <div>
+          <h3 className="text-sm font-medium">{t("elevenLabs.registration.outlookTitle")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{t("elevenLabs.registration.outlookDescription")}</p>
+        </div>
+        <Textarea className="min-h-28 font-mono text-xs" value={outlookText} onChange={(event) => setOutlookText(event.target.value)} placeholder="email----password----client_id----refresh_token" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" disabled={!outlookText.trim() || outlookImportMutation.isPending} onClick={() => outlookImportMutation.mutate()}>
+            {outlookImportMutation.isPending ? <Spinner /> : <Upload />}{t("elevenLabs.registration.outlookImport")}
+          </Button>
+          <span className="text-xs text-muted-foreground">{t("elevenLabs.registration.outlookPool", { available: status?.outlookPool?.available ?? 0, total: status?.outlookPool?.total ?? 0 })}</span>
+        </div>
+      </section>
 
       <div className="flex flex-wrap items-end gap-3 border-b pb-6">
         <div className="space-y-1.5">
@@ -675,7 +700,7 @@ const EMPTY_RUNTIME_FORM: ElevenLabsRuntimeConfigInput = {
   captchaProvider: "yescaptcha",
   yesCaptchaAPIKey: "", clearYesCaptchaAPIKey: false, yesCaptchaEndpoint: "https://api.yescaptcha.com",
   captchaGatewayAPIKey: "", clearCaptchaGatewayAPIKey: false, captchaGatewayEndpoint: "https://sub.aixiangshu.com",
-  yydsAPIKey: "", clearYYDSAPIKey: false, yydsAPIBase: "https://maliapi.215.im/v1", mailDomains: "",
+  yydsAPIKey: "", clearYYDSAPIKey: false, yydsAPIBase: "https://maliapi.215.im/v1", mailProvider: "yyds", mailDomains: "",
 };
 
 function RuntimeConfigWorkspace() {
@@ -699,6 +724,7 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
     yesCaptchaEndpoint: config.yesCaptchaEndpoint,
     captchaGatewayEndpoint: config.captchaGatewayEndpoint,
     yydsAPIBase: config.yydsAPIBase,
+    mailProvider: config.mailProvider,
     mailDomains: config.mailDomains,
   }));
   const saveMutation = useMutation({
@@ -790,6 +816,15 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
                 </Field>
               </>
             )}
+            <Field label={t("elevenLabs.runtime.mailProvider")} htmlFor="elevenlabs-runtime-mail-provider">
+              <Select value={form.mailProvider} onValueChange={(mailProvider: "yyds" | "outlook") => setForm((current) => ({ ...current, mailProvider }))}>
+                <SelectTrigger id="elevenlabs-runtime-mail-provider"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="yyds">YYDS Mail</SelectItem>
+                  <SelectItem value="outlook">Outlook IMAP</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
             <Field label="YYDS API Key" htmlFor="elevenlabs-runtime-yyds-key">
               <Input id="elevenlabs-runtime-yyds-key" type="password" autoComplete="off" value={form.yydsAPIKey} onChange={(event) => setForm((current) => ({ ...current, yydsAPIKey: event.target.value }))} placeholder={config?.yydsKeyConfigured ? t("elevenLabs.runtime.keepSecret") : "AC-..."} />
             </Field>

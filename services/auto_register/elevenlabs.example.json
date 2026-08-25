@@ -21,7 +21,7 @@
     "timeout_sec": 180
   },
   "mail": {
-    "provider": "yyds",
+    "provider": "outlook",
     "yyds_api_base": "https://maliapi.215.im/v1",
     "yyds_api_key": "${YYDS_API_KEY}",
     "mailDomains": "${ELEVENLABS_MAIL_DOMAINS}",

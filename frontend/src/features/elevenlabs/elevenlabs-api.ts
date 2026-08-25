@@ -23,8 +23,10 @@ export type ElevenLabsModelListDTO = {
 };
 
 export type ElevenLabsCaptchaProvider = "yescaptcha" | "captcha_gateway";
+export type ElevenLabsMailProvider = "yyds" | "outlook";
 
 const isCaptchaProvider = (value: unknown): value is ElevenLabsCaptchaProvider => value === "yescaptcha" || value === "captcha_gateway";
+const isMailProvider = (value: unknown): value is ElevenLabsMailProvider => value === "yyds" || value === "outlook";
 
 export type ElevenLabsRuntimeConfigDTO = {
   apiKeyConfigured: boolean;
@@ -42,6 +44,7 @@ export type ElevenLabsRuntimeConfigDTO = {
   captchaGatewayEndpoint: string;
   yydsKeyConfigured: boolean;
   yydsAPIBase: string;
+  mailProvider: ElevenLabsMailProvider;
   mailDomains: string;
   revision: number;
 };
@@ -66,6 +69,7 @@ export type ElevenLabsRuntimeConfigInput = {
   yydsAPIKey: string;
   clearYYDSAPIKey: boolean;
   yydsAPIBase: string;
+  mailProvider: ElevenLabsMailProvider;
   mailDomains: string;
 };
 
@@ -78,6 +82,17 @@ export type ElevenLabsRuntimePreflightDTO = {
   yyds: Record<string, unknown>;
 };
 
+export type ElevenLabsOutlookPoolDTO = {
+  available: number;
+  inUse: number;
+  done: number;
+  failed: number;
+  total: number;
+  imported?: number;
+  updated?: number;
+  skipped?: number;
+};
+
 export type ElevenLabsRegistrationStatusDTO = {
   reachable: boolean;
   running: boolean;
@@ -85,6 +100,8 @@ export type ElevenLabsRegistrationStatusDTO = {
   captchaProvider: ElevenLabsCaptchaProvider;
   captchaConfigured: boolean;
   mailConfigured: boolean;
+  mailProvider?: ElevenLabsMailProvider;
+  outlookPool?: ElevenLabsOutlookPoolDTO;
   runtimeRevision: number;
   error?: string;
 };
@@ -228,6 +245,7 @@ const runtimeConfigDecoder = createObjectDecoder<ElevenLabsRuntimeConfigDTO>("El
   captchaGatewayEndpoint: isString,
   yydsKeyConfigured: isBoolean,
   yydsAPIBase: isString,
+  mailProvider: isMailProvider,
   mailDomains: isString,
   revision: isNumber,
 });
@@ -241,6 +259,16 @@ const runtimePreflightDecoder = createObjectDecoder<ElevenLabsRuntimePreflightDT
   yyds: isObject,
 });
 
+const outlookPoolValidator = hasShape({
+  available: isNumber,
+  inUse: isNumber,
+  done: isNumber,
+  failed: isNumber,
+  total: isNumber,
+  imported: isOptional(isNumber),
+  updated: isOptional(isNumber),
+  skipped: isOptional(isNumber),
+});
 const registrationStatusDecoder = createObjectDecoder<ElevenLabsRegistrationStatusDTO>("ElevenLabs registration status", {
   reachable: isBoolean,
   running: isBoolean,
@@ -248,8 +276,20 @@ const registrationStatusDecoder = createObjectDecoder<ElevenLabsRegistrationStat
   captchaProvider: isCaptchaProvider,
   captchaConfigured: isBoolean,
   mailConfigured: isBoolean,
+  mailProvider: isOptional(isMailProvider),
+  outlookPool: isOptional(outlookPoolValidator),
   runtimeRevision: isNumber,
   error: isOptional(isString),
+});
+const outlookPoolDecoder = createObjectDecoder<ElevenLabsOutlookPoolDTO>("ElevenLabs Outlook pool", {
+  available: isNumber,
+  inUse: isNumber,
+  done: isNumber,
+  failed: isNumber,
+  total: isNumber,
+  imported: isOptional(isNumber),
+  updated: isOptional(isNumber),
+  skipped: isOptional(isNumber),
 });
 
 const createdAccountValidator = hasShape({
@@ -353,6 +393,10 @@ export function preflightElevenLabsRuntime(): Promise<ElevenLabsRuntimePreflight
 
 export function getElevenLabsRegistrationStatus(): Promise<ElevenLabsRegistrationStatusDTO> {
   return apiRequest("/api/admin/v1/elevenlabs/registration/status", {}, registrationStatusDecoder);
+}
+
+export function importElevenLabsOutlookAccounts(text: string): Promise<ElevenLabsOutlookPoolDTO> {
+  return apiRequest("/api/admin/v1/elevenlabs/registration/outlook/import", { method: "POST", body: { text } }, outlookPoolDecoder);
 }
 
 export function getElevenLabsRegistrationAccounts(): Promise<ElevenLabsRegistrationAccountDTO[]> {
