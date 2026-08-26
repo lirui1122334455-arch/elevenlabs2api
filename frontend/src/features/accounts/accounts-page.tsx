@@ -821,7 +821,6 @@ export function AccountsPage() {
               spellCheck={false}
               value={quickImportTokens}
               onChange={(event) => setQuickImportTokens(event.target.value)}
-              placeholder={t("accounts.ssoTokenPlaceholder")}
             />
           </div>
           <DialogFooter>

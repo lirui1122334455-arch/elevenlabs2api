@@ -143,7 +143,7 @@ python server.py
 | 项 | 说明 |
 | :-- | :-- |
 | API Base | 可留空用默认 |
-| API Key | 控制台 `AC-…`（`X-API-Key`） |
+| API Key | 从供应商控制台获取（请求头 `X-API-Key`） |
 | JWT | 可选，与 Key 二选一 |
 | **邮箱域名** | **填你在 YYDS 托管并验证的自有域名** |
 

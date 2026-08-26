@@ -490,7 +490,7 @@ function RegistrationWorkspace() {
           <h3 className="text-sm font-medium">{t("elevenLabs.registration.outlookTitle")}</h3>
           <p className="mt-1 text-xs text-muted-foreground">{t("elevenLabs.registration.outlookDescription")}</p>
         </div>
-        <Textarea className="min-h-28 font-mono text-xs" value={outlookText} onChange={(event) => setOutlookText(event.target.value)} placeholder="email----password----client_id----refresh_token" />
+        <Textarea className="min-h-28 font-mono text-xs" value={outlookText} onChange={(event) => setOutlookText(event.target.value)} />
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" disabled={!outlookText.trim() || outlookImportMutation.isPending} onClick={() => outlookImportMutation.mutate()}>
             {outlookImportMutation.isPending ? <Spinner /> : <Upload />}{t("elevenLabs.registration.outlookImport")}
@@ -809,7 +809,7 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
         <ConfigSection title={t("elevenLabs.runtime.gatewaySection")}>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="ElevenLabs API Key" htmlFor="elevenlabs-runtime-api-key">
-              <Input id="elevenlabs-runtime-api-key" type="password" autoComplete="off" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder={config?.apiKeyConfigured ? t("elevenLabs.runtime.keepSecret") : "xi-api-key"} />
+              <Input id="elevenlabs-runtime-api-key" type="password" autoComplete="off" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder={config?.apiKeyConfigured ? t("elevenLabs.runtime.keepSecret") : undefined} />
             </Field>
             <Field label={t("elevenLabs.runtime.apiBaseURL")} htmlFor="elevenlabs-runtime-api-base">
               <Input id="elevenlabs-runtime-api-base" value={form.apiBaseURL} onChange={(event) => setForm((current) => ({ ...current, apiBaseURL: event.target.value }))} />
@@ -876,13 +876,13 @@ function RuntimeConfigForm({ config }: { config: ElevenLabsRuntimeConfigDTO }) {
               </Select>
             </Field>
             <Field label="YYDS API Key" htmlFor="elevenlabs-runtime-yyds-key">
-              <Input id="elevenlabs-runtime-yyds-key" type="password" autoComplete="off" value={form.yydsAPIKey} onChange={(event) => setForm((current) => ({ ...current, yydsAPIKey: event.target.value }))} placeholder={config?.yydsKeyConfigured ? t("elevenLabs.runtime.keepSecret") : "AC-..."} />
+              <Input id="elevenlabs-runtime-yyds-key" type="password" autoComplete="off" value={form.yydsAPIKey} onChange={(event) => setForm((current) => ({ ...current, yydsAPIKey: event.target.value }))} placeholder={config?.yydsKeyConfigured ? t("elevenLabs.runtime.keepSecret") : undefined} />
             </Field>
             <Field label="YYDS API Base" htmlFor="elevenlabs-runtime-yyds-base">
               <Input id="elevenlabs-runtime-yyds-base" value={form.yydsAPIBase} onChange={(event) => setForm((current) => ({ ...current, yydsAPIBase: event.target.value }))} />
             </Field>
             <Field label={t("elevenLabs.runtime.mailDomains")} htmlFor="elevenlabs-runtime-domains">
-              <Input id="elevenlabs-runtime-domains" value={form.mailDomains} onChange={(event) => setForm((current) => ({ ...current, mailDomains: event.target.value }))} placeholder="318ai.top, 88.mivioo.xyz" />
+              <Input id="elevenlabs-runtime-domains" value={form.mailDomains} onChange={(event) => setForm((current) => ({ ...current, mailDomains: event.target.value }))} />
             </Field>
             <Field label={t("elevenLabs.runtime.registrationTimeout")} htmlFor="elevenlabs-runtime-registration-timeout">
               <Input id="elevenlabs-runtime-registration-timeout" type="number" min={60} max={1800} value={form.registrationTimeout} onChange={(event) => setForm((current) => ({ ...current, registrationTimeout: Number(event.target.value) }))} />

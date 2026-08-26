@@ -566,6 +566,38 @@ def _capture_signin_response(response: Any, state: dict[str, Any]) -> None:
         return
 
 
+def _capture_verification_response(response: Any, state: dict[str, Any]) -> None:
+    try:
+        parsed = urlsplit(str(response.url or ""))
+        if parsed.hostname != "identitytoolkit.googleapis.com" or not parsed.path.endswith(
+            "/accounts:update"
+        ):
+            return
+        request_payload = _request_json_payload(response.request)
+        if not str(request_payload.get("oobCode") or "").strip():
+            return
+        status = int(response.status)
+        state["requests"] = int(state.get("requests") or 0) + 1
+        state["last_response_at"] = time.monotonic()
+        if state.get("verified"):
+            return
+        if 200 <= status < 300:
+            state.update({"verified": True, "status": status, "error": ""})
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        state.update(
+            {
+                "status": status,
+                "error": _submission_error_message(payload) or "identity provider rejected the action code",
+            }
+        )
+    except Exception:
+        return
+
+
 def _wait_for_authenticated(
     page: Any,
     timeout: float,
@@ -625,11 +657,30 @@ def _signin_bridge_status(page: Any, timeout: float = 3) -> dict[str, Any]:
     return last
 
 
-def _fill_and_submit_signin(page: Any, email: str, password: str) -> None:
-    _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
-    page.locator(SIGNIN_EMAIL).fill(email)
-    page.locator(SIGNIN_PASSWORD).fill(password)
-    _click_signin(page)
+def _fill_and_submit_signin(
+    page: Any,
+    email: str,
+    password: str,
+    *,
+    emit: Callable[[str], None] | None = None,
+) -> None:
+    for attempt in range(2):
+        _wait_for_form(page, (SIGNIN_EMAIL, SIGNIN_PASSWORD, SIGNIN_SUBMIT), "sign-in")
+        page.locator(SIGNIN_EMAIL).fill(email)
+        page.locator(SIGNIN_PASSWORD).fill(password)
+        try:
+            _click_signin(page)
+            return
+        except RuntimeError as exc:
+            if "sign-in submit button remained disabled" not in str(exc) or attempt > 0:
+                raise
+            if emit:
+                _emit(
+                    emit,
+                    "fill_signin",
+                    "sign-in form remained disabled after email verification; reloading before submit",
+                )
+            page.goto(SIGNIN_URL, wait_until="domcontentloaded")
 
 
 def _automated_signin(
@@ -644,7 +695,7 @@ def _automated_signin(
     page.on("response", lambda response: _capture_signin_response(response, signin_state))
     page.goto(SIGNIN_URL, wait_until="domcontentloaded")
     _emit(emit, "fill_signin", "submitting ElevenLabs sign-in attempt 1/2")
-    _fill_and_submit_signin(page, email, password)
+    _fill_and_submit_signin(page, email, password, emit=emit)
     if _wait_for_authenticated(
         page,
         30,
@@ -664,7 +715,7 @@ def _automated_signin(
         _emit(emit, "fill_signin", "first sign-in attempt did not authenticate; reloading before retry")
         page.goto(SIGNIN_URL, wait_until="domcontentloaded")
     _emit(emit, "fill_signin", "submitting ElevenLabs sign-in attempt 2/2")
-    _fill_and_submit_signin(page, email, password)
+    _fill_and_submit_signin(page, email, password, emit=emit)
     if _wait_for_authenticated(
         page,
         45,
@@ -736,30 +787,53 @@ def _wait_for_verification_required(page: Any, timeout: float) -> None:
 
 
 def _email_verified(page: Any) -> bool:
-    path = urlsplit(page.url).path.lower()
-    if "sign-in" in path or path.rstrip("/") == "/app/sign-in":
-        return True
     body = _page_text(page)
     markers = (
         "email verified",
         "successfully verified",
         "verification successful",
-        "sign in to continue",
-        "log in to continue",
         "verified your email",
     )
     return any(marker in body for marker in markers) or _authenticated(page)
 
 
-def _wait_for_email_verified(page: Any, timeout: float) -> None:
+def _verification_response_error(state: dict[str, Any]) -> RuntimeError | None:
+    status = state.get("status")
+    if not isinstance(status, int) or status < 400 or state.get("verified"):
+        return None
+    detail = str(state.get("error") or "identity provider rejected the action code")[:240]
+    return RuntimeError(f"verification_link_rejected: Firebase HTTP {status}: {detail}")
+
+
+def _wait_for_email_verified(
+    page: Any,
+    timeout: float,
+    *,
+    verification_state: dict[str, Any] | None = None,
+) -> None:
+    state = verification_state if verification_state is not None else {}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         body = _page_text(page)
         if "expired" in body or "invalid verification" in body or "link is invalid" in body:
             raise RuntimeError("verification_link_expired: ElevenLabs reported an expired or invalid link")
-        if _email_verified(page):
+        if state.get("verified") or _email_verified(page):
             return
+        response_error = _verification_response_error(state)
+        last_response_at = float(state.get("last_response_at") or 0)
+        if response_error and time.monotonic() - last_response_at >= 2:
+            raise response_error
         time.sleep(1)
+    if state.get("verified") or _email_verified(page):
+        return
+    response_error = _verification_response_error(state)
+    if response_error:
+        raise response_error
+    path = urlsplit(str(page.url or "")).path or "/"
+    raise RuntimeError(
+        "timed out waiting for ElevenLabs to confirm the email verification action "
+        f"(path={path}, identity_status={state.get('status') or 'not_observed'})"
+    )
 
 
 def _accept_terms(page: Any) -> None:
@@ -1219,9 +1293,16 @@ def _run_registration(
 ) -> BrowserResult:
     manager, context, temporary_profile = _new_context(config)
     account_state: dict[str, Any] = {"api_key": "", "subscription": None}
+    verification_state: dict[str, Any] = {
+        "verified": False,
+        "status": None,
+        "error": "",
+        "requests": 0,
+    }
     try:
         page = _page(context)
         page.on("response", lambda response: _capture_account_response(response, account_state))
+        page.on("response", lambda response: _capture_verification_response(response, verification_state))
         _emit(emit, "load_signup", "opening a clean ElevenLabs sign-up profile")
         page.goto(SIGNUP_URL, wait_until="domcontentloaded")
         _assert_signup_page(page)
@@ -1263,7 +1344,13 @@ def _run_registration(
 
         _emit(emit, "verify_email", "opening the verification link")
         page.goto(link, wait_until="domcontentloaded")
-        _wait_for_email_verified(page, min(config.confirmation_timeout, 60))
+        _wait_for_email_verified(
+            page,
+            min(config.confirmation_timeout, 60),
+            verification_state=verification_state,
+        )
+        _emit(emit, "verify_email", "email verification action confirmed")
+        page.goto("about:blank", wait_until="load")
 
         _emit(emit, "load_signin", "opening ElevenLabs sign-in")
         if automated:

@@ -7,8 +7,9 @@ Provides automated solving of:
   - Cloudflare cf_clearance cookies (via challenge page if supported)
 
 Usage:
+    import os
     from xconsole_client.solver import YesCaptchaSolver
-    solver = YesCaptchaSolver(api_key="your_key")
+    solver = YesCaptchaSolver(api_key=os.environ["YESCAPTCHA_API_KEY"])
     turnstile_token = solver.solve_turnstile(
         website_url="https://accounts.x.ai/sign-up",
         website_key="0x4XXXXXXXXXXXXXXXXX"  # extract from browser DevTools

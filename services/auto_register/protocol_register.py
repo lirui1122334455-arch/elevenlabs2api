@@ -458,7 +458,7 @@ def create_cloudflare_mailbox(
 
 # ──────────────────────── YYDS Mail (https://vip.215.im/docs) ────────────────────────
 # Base: https://maliapi.215.im/v1
-# Auth: X-API-Key: AC-xxx  OR  Authorization: Bearer <jwt|temp_token>
+# Auth: X-API-Key: <api-key>  OR  Authorization: Bearer <jwt|temp_token>
 
 YYDS_API_BASE_DEFAULT = "https://maliapi.215.im/v1"
 

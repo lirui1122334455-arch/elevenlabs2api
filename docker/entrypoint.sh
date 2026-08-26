@@ -14,4 +14,3 @@ chown grok2api:grok2api /app/config.yaml
 chmod 0600 /app/config.yaml
 
 exec su-exec grok2api:grok2api "$@"
-

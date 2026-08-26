@@ -125,7 +125,7 @@ export function SettingsPage() {
               </SettingsField>
               {statsigMode === "manual" ? (
                 <SettingsField controlId="web-statsig-manual" className="sm:col-span-2" label={t("settings.web.statsigValue")} badge={statsigManualConfigured ? t("settings.web.statsigConfigured") : undefined} error={form.formState.errors.providerWeb?.statsigManualValue?.message}>
-                  <Input id="web-statsig-manual" type="password" autoComplete="off" placeholder={statsigManualConfigured ? t("settings.web.statsigKeepConfigured") : t("settings.web.statsigValuePlaceholder")} {...form.register("providerWeb.statsigManualValue")} />
+                  <Input id="web-statsig-manual" type="password" autoComplete="off" placeholder={statsigManualConfigured ? t("settings.web.statsigKeepConfigured") : undefined} {...form.register("providerWeb.statsigManualValue")} />
                 </SettingsField>
               ) : (
                 <SettingsField controlId="web-statsig-url" className="sm:col-span-2" label={t("settings.web.statsigSignerURL")} error={form.formState.errors.providerWeb?.statsigSignerURL?.message}>
@@ -347,7 +347,7 @@ export function SettingsPage() {
                   id="auto-register-mail-key"
                   type="password"
                   autoComplete="off"
-                  placeholder={form.watch("autoRegister.mailAdminKeyConfigured") ? t("settings.autoRegister.keepConfigured") : (form.watch("autoRegister.mailProvider") === "yyds" ? "AC-..." : undefined)}
+                  placeholder={form.watch("autoRegister.mailAdminKeyConfigured") ? t("settings.autoRegister.keepConfigured") : undefined}
                   {...form.register("autoRegister.mailAdminKey")}
                 />
                 {form.watch("autoRegister.mailProvider") === "yyds" ? (
@@ -360,7 +360,7 @@ export function SettingsPage() {
                     id="auto-register-yyds-jwt"
                     type="password"
                     autoComplete="off"
-                    placeholder={form.watch("autoRegister.yydsJwtConfigured") ? t("settings.autoRegister.keepConfigured") : "eyJ..."}
+                    placeholder={form.watch("autoRegister.yydsJwtConfigured") ? t("settings.autoRegister.keepConfigured") : undefined}
                     {...form.register("autoRegister.yydsJwt")}
                   />
                   <p className="mt-1 text-[11px] text-muted-foreground">{t("settings.autoRegister.yydsJwtHelp")}</p>
@@ -369,7 +369,7 @@ export function SettingsPage() {
               {form.watch("autoRegister.mailProvider") !== "yyds" ? (
                 <>
                   <SettingsField controlId="auto-register-mail-mode" label={t("settings.autoRegister.mailAuthMode")} error={form.formState.errors.autoRegister?.mailAuthMode?.message}>
-                    <Input id="auto-register-mail-mode" placeholder="x-admin-auth" {...form.register("autoRegister.mailAuthMode")} />
+                    <Input id="auto-register-mail-mode" {...form.register("autoRegister.mailAuthMode")} />
                   </SettingsField>
                   <SettingsField controlId="auto-register-mail-new" label={t("settings.autoRegister.mailPathNewAddress")} error={form.formState.errors.autoRegister?.mailPathNewAddress?.message}>
                     <Input id="auto-register-mail-new" {...form.register("autoRegister.mailPathNewAddress")} />
@@ -382,7 +382,6 @@ export function SettingsPage() {
               <SettingsField controlId="auto-register-mail-domains" className="sm:col-span-2" label={t("settings.autoRegister.mailDomains")} error={form.formState.errors.autoRegister?.mailDomains?.message}>
                 <Input
                   id="auto-register-mail-domains"
-                  placeholder={form.watch("autoRegister.mailProvider") === "yyds" ? "mail.your-domain.com" : "edu.example.com, mail.example.com"}
                   {...form.register("autoRegister.mailDomains")}
                 />
                 {form.watch("autoRegister.mailProvider") === "yyds" ? (
@@ -464,7 +463,7 @@ export function SettingsPage() {
               </SettingsField>
               <SettingsField controlId="auto-register-probe-model" label={t("settings.autoRegister.probeModel")} description={t("settings.autoRegister.probeModelHelp")}>
                 <Controller control={form.control} name="autoRegister.probeModel" render={({ field }) => (
-                  <Input id="auto-register-probe-model" value={field.value} onChange={field.onChange} placeholder="grok-4.5" />
+                  <Input id="auto-register-probe-model" value={field.value} onChange={field.onChange} />
                 )} />
               </SettingsField>
             </div>

@@ -47,6 +47,7 @@ Thumbs.db
 /release/
 /.tmp/
 /tmp/
+/.playwright-cli/
 
 # Auto-register runtime secrets / artifacts
 services/auto_register/proxies.txt

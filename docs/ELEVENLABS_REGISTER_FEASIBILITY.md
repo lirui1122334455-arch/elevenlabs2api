@@ -12,7 +12,7 @@ ElevenLabs 注册不能通过替换其他站点的注册 URL 实现。当前方�
 - 注册页邮箱、密码和提交按钮可被浏览器定位。
 - 无提交的浏览器干跑成功。
 - YesCaptcha Key 已验证；Captcha Gateway 已接入并配置，未主动创建付费任务。
-- YYDS Key 可读取域名，自有域名 `318ai.top` 和 `88.mivioo.xyz` 已验证。
+- YYDS Key 已验证可读取账号下配置的自有域名；具体域名仅来自运行配置或供应商 API，不写入源码。
 - 服务重建后运行配置仍由本地 Docker 卷保留。
 - 临时 Chromium profile 会在任务结束后清理。
 

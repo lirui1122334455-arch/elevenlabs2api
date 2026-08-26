@@ -66,6 +66,7 @@ class _FakeSigninPage:
         self.url = "https://elevenlabs.io/app/sign-in"
         self.gotos: list[str] = []
         self.listeners: list[tuple[str, object]] = []
+        self.fills: list[tuple[str, str]] = []
 
     def on(self, event: str, callback: object) -> None:
         self.listeners.append((event, callback))
@@ -73,6 +74,26 @@ class _FakeSigninPage:
     def goto(self, url: str, **_kwargs: object) -> None:
         self.url = url
         self.gotos.append(url)
+
+    def locator(self, selector: str) -> object:
+        page = self
+
+        class Locator:
+            def fill(self, value: str) -> None:
+                page.fills.append((selector, value))
+
+        return Locator()
+
+
+class _FakeIdentityResponse:
+    def __init__(self, status: int, payload: dict[str, object]) -> None:
+        self.url = "https://identitytoolkit.googleapis.com/v1/accounts:update?key=public-key"
+        self.status = status
+        self.request = SimpleNamespace(post_data_json={"oobCode": "do-not-log"})
+        self._payload = payload
+
+    def json(self) -> dict[str, object]:
+        return self._payload
 
 
 class CaptchaProxyTest(unittest.TestCase):
@@ -380,9 +401,73 @@ class SignupStateTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "email_in_use"):
             _raise_if_signup_failed(page)
 
-    def test_verified_state_from_signin_url(self) -> None:
+    def test_signin_url_alone_is_not_a_verified_state(self) -> None:
         page = _FakePage("https://elevenlabs.io/app/sign-in")
+        self.assertFalse(_email_verified(page))
+
+    def test_verified_state_from_explicit_success_copy(self) -> None:
+        page = _FakePage("https://elevenlabs.io/app/sign-in", "Your email was successfully verified")
         self.assertTrue(_email_verified(page))
+
+    def test_captures_successful_firebase_verification_action(self) -> None:
+        state: dict[str, object] = {"verified": False, "status": None, "error": ""}
+        browser_flow._capture_verification_response(
+            _FakeIdentityResponse(200, {"emailVerified": True}),
+            state,
+        )
+        self.assertTrue(state["verified"])
+        self.assertEqual(state["status"], 200)
+
+    def test_duplicate_action_error_does_not_overwrite_prior_success(self) -> None:
+        state: dict[str, object] = {"verified": False, "status": None, "error": ""}
+        browser_flow._capture_verification_response(
+            _FakeIdentityResponse(200, {"emailVerified": True}),
+            state,
+        )
+        browser_flow._capture_verification_response(
+            _FakeIdentityResponse(400, {"error": {"message": "INVALID_OOB_CODE"}}),
+            state,
+        )
+        self.assertTrue(state["verified"])
+        self.assertEqual(state["status"], 200)
+        self.assertEqual(state["error"], "")
+
+    def test_rejected_action_does_not_pass_after_signin_redirect(self) -> None:
+        state: dict[str, object] = {"verified": False, "status": None, "error": ""}
+        browser_flow._capture_verification_response(
+            _FakeIdentityResponse(400, {"error": {"message": "INVALID_OOB_CODE"}}),
+            state,
+        )
+        page = _FakePage("https://elevenlabs.io/app/sign-in", "Sign in")
+        with self.assertRaisesRegex(RuntimeError, "INVALID_OOB_CODE"):
+            browser_flow._wait_for_email_verified(page, 0, verification_state=state)
+
+    def test_verification_wait_raises_when_no_success_signal_arrives(self) -> None:
+        page = _FakePage("https://elevenlabs.io/app/action")
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            browser_flow._wait_for_email_verified(page, 0)
+
+    def test_disabled_signin_form_reloads_once_before_submission(self) -> None:
+        page = _FakeSigninPage()
+        logs: list[str] = []
+        with (
+            patch.object(browser_flow, "_wait_for_form"),
+            patch.object(
+                browser_flow,
+                "_click_signin",
+                side_effect=[RuntimeError("ElevenLabs sign-in submit button remained disabled"), None],
+            ) as click,
+        ):
+            browser_flow._fill_and_submit_signin(
+                page,
+                "one@example.com",
+                "Password1!",
+                emit=logs.append,
+            )
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(page.gotos, [browser_flow.SIGNIN_URL])
+        self.assertEqual(len(page.fills), 4)
+        self.assertTrue(any("reloading" in line for line in logs))
 
     def test_automated_signin_reloads_after_a_silent_first_attempt(self) -> None:
         page = _FakeSigninPage()
